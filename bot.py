@@ -37,7 +37,7 @@ def create_api():
     return AmazonCreatorsApi(
         credential_id=AMAZON_CREDENTIAL_ID,
         credential_secret=AMAZON_CREDENTIAL_SECRET,
-        version="2.2",
+        version="3.2",
         tag=AMAZON_PARTNER_TAG,
         country=Country.IT,
         throttling=1.0,
