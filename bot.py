@@ -59,17 +59,10 @@ def create_api() -> AmazonCreatorsApi:
 # ============================================================
 def search_deals(api: AmazonCreatorsApi, keyword: str, max_results: int = 10) -> list[dict]:
     """Cerca prodotti in offerta per una keyword."""
-    try:
+        try:
         results = api.search_items(
             keywords=keyword,
             item_count=max_results,
-            resources=[
-                SearchItemsResource.ITEMINFO_TITLE,
-                SearchItemsResource.OFFERS_LISTINGS_PRICE,
-                SearchItemsResource.OFFERS_LISTINGS_SAVINGBASIS,
-                SearchItemsResource.OFFERS_LISTINGS_MERCHANTINFO,
-                SearchItemsResource.IMAGES_PRIMARY_LARGE,
-            ],
             condition=Condition.NEW,
         )
     except Exception as e:
