@@ -58,7 +58,7 @@ def get_signature_key(secret_key: str, date_stamp: str, region: str, service: st
 def amazon_api_request(payload: dict) -> dict:
     """Esegue una richiesta firmata alla PA-API 5.0."""
     service = "ProductAdvertisingAPI"
-    host = f"webservices.amazon.it"
+    host = "webservices.amazon.com"
     endpoint = f"https://{host}/paapi5/searchitems"
     content_type = "application/json; charset=UTF-8"
 
