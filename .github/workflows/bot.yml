@@ -36,11 +36,9 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          AMAZON_ACCESS_KEY: ${{ secrets.AMAZON_ACCESS_KEY }}
-          AMAZON_SECRET_KEY: ${{ secrets.AMAZON_SECRET_KEY }}
+          AMAZON_CREDENTIAL_ID: ${{ secrets.AMAZON_CREDENTIAL_ID }}
+          AMAZON_CREDENTIAL_SECRET: ${{ secrets.AMAZON_CREDENTIAL_SECRET }}
           AMAZON_PARTNER_TAG: ${{ secrets.AMAZON_PARTNER_TAG }}
-          AMAZON_MARKETPLACE: ${{ secrets.AMAZON_MARKETPLACE || 'www.amazon.it' }}
-          AMAZON_REGION: ${{ secrets.AMAZON_REGION || 'eu-west-1' }}
           MIN_DISCOUNT_PERCENT: ${{ secrets.MIN_DISCOUNT_PERCENT || '20' }}
         run: python bot.py
 
