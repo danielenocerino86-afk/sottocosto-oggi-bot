@@ -1,0 +1,52 @@
+name: Sottocosto Oggi Bot
+
+on:
+  # Esecuzione ogni 15 minuti
+  schedule:
+    - cron: '*/15 * * * *'  # Ogni 15 minuti
+
+  # Permette esecuzione manuale dal tab Actions
+  workflow_dispatch:
+
+jobs:
+  fetch-and-post:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore posted deals cache
+        uses: actions/cache@v4
+        with:
+          path: posted_deals.json
+          key: posted-deals-${{ github.run_id }}
+          restore-keys: |
+            posted-deals-
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          AMAZON_ACCESS_KEY: ${{ secrets.AMAZON_ACCESS_KEY }}
+          AMAZON_SECRET_KEY: ${{ secrets.AMAZON_SECRET_KEY }}
+          AMAZON_PARTNER_TAG: ${{ secrets.AMAZON_PARTNER_TAG }}
+          AMAZON_MARKETPLACE: ${{ secrets.AMAZON_MARKETPLACE || 'www.amazon.it' }}
+          AMAZON_REGION: ${{ secrets.AMAZON_REGION || 'eu-west-1' }}
+          MIN_DISCOUNT_PERCENT: ${{ secrets.MIN_DISCOUNT_PERCENT || '20' }}
+        run: python bot.py
+
+      - name: Save posted deals cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: posted_deals.json
+          key: posted-deals-${{ github.run_id }}
