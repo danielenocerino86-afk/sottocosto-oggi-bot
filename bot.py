@@ -21,6 +21,8 @@ AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "20"))
+MAX_POSTS_PER_CATEGORY = 5
+POST_INTERVAL_SECONDS = 120
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 
@@ -79,7 +81,6 @@ def parse_item(item):
         saving_amount = None
         image_url = None
 
-        # Titolo
         try:
             title = item.item_info.title.display_value
         except (AttributeError, TypeError):
@@ -88,19 +89,15 @@ def parse_item(item):
         if not asin or not title:
             return None
 
-        # Prezzi da offers_v2.listings[0].price
         try:
             listing = item.offers_v2.listings[0]
             price_obj = listing.price
 
-            # Prezzo attuale: price.money.amount
             current_price = price_obj.money.amount
 
-            # Prezzo originale: price.saving_basis.money.amount
             if price_obj.saving_basis and price_obj.saving_basis.money:
                 original_price = price_obj.saving_basis.money.amount
 
-            # Sconto %: price.savings.percentage
             if price_obj.savings:
                 discount_pct = price_obj.savings.percentage
                 if price_obj.savings.money:
@@ -111,14 +108,11 @@ def parse_item(item):
             return None
 
         if not current_price:
-            print("   [SKIP] No price: {}".format(asin))
             return None
 
-        # Se non ho il prezzo originale ma ho lo sconto %, lo calcolo
         if not original_price and discount_pct and discount_pct > 0:
             original_price = round(current_price / (1 - discount_pct / 100), 2)
 
-        # Se non ho lo sconto % ma ho entrambi i prezzi, lo calcolo
         if not discount_pct and original_price and original_price > current_price:
             discount_pct = round(((original_price - current_price) / original_price) * 100)
 
@@ -131,7 +125,6 @@ def parse_item(item):
         if not discount_pct or discount_pct < MIN_DISCOUNT_PERCENT:
             return None
 
-        # Immagine
         try:
             image_url = item.images.primary.large.url
         except (AttributeError, TypeError):
@@ -151,9 +144,24 @@ def parse_item(item):
         return None
 
 
-def send_telegram_message(text):
+def send_telegram_message(text, image_url=None):
     base_url = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
     try:
+        if image_url:
+            resp = requests.post(
+                "{}/sendPhoto".format(base_url),
+                json={
+                    "chat_id": TELEGRAM_CHANNEL_ID,
+                    "photo": image_url,
+                    "caption": text,
+                    "parse_mode": "HTML",
+                },
+                timeout=15,
+            )
+            if resp.json().get("ok"):
+                return True
+            print("   Foto fallita, invio senza immagine...")
+
         resp = requests.post(
             "{}/sendMessage".format(base_url),
             json={
@@ -220,6 +228,8 @@ def main():
     print("Canale: {}".format(TELEGRAM_CHANNEL_ID))
     print("Partner Tag: {}".format(AMAZON_PARTNER_TAG))
     print("Sconto minimo: {}%".format(MIN_DISCOUNT_PERCENT))
+    print("Max post per categoria: {}".format(MAX_POSTS_PER_CATEGORY))
+    print("Intervallo tra post: {} secondi".format(POST_INTERVAL_SECONDS))
 
     missing = []
     for var in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
@@ -239,23 +249,28 @@ def main():
         deals = search_deals(api, keyword)
         print("   Trovate {} offerte con sconto >= {}%".format(len(deals), MIN_DISCOUNT_PERCENT))
 
+        published_in_category = 0
         for deal in deals:
+            if published_in_category >= MAX_POSTS_PER_CATEGORY:
+                print("   Raggiunto limite {} per {}".format(MAX_POSTS_PER_CATEGORY, keyword))
+                break
+
             if deal["asin"] in posted:
                 print("   Gia pubblicata: {}".format(deal["asin"]))
                 continue
 
             print("   Pubblico: {}... (-{}%)".format(deal["title"][:60], deal["discount_percent"]))
             message = format_deal_message(deal)
-            success = send_telegram_message(message)
+            success = send_telegram_message(message, deal.get("image_url"))
 
             if success:
                 posted.add(deal["asin"])
                 new_deals_count += 1
-                print("   Pubblicata!")
+                published_in_category += 1
+                print("   Pubblicata! (attendo {} sec)".format(POST_INTERVAL_SECONDS))
+                time.sleep(POST_INTERVAL_SECONDS)
             else:
                 print("   Errore invio")
-
-            time.sleep(3)
 
     save_posted(posted)
     print("\nCompletato! {} nuove offerte pubblicate.".format(new_deals_count))
