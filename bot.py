@@ -1,7 +1,7 @@
 """
-Sottocosto Oggi - Bot Telegram v5
+Sottocosto Oggi - Bot Telegram v7
 Recupera offerte da Amazon Creators API e le pubblica su @sottocosto_oggi.
-Anti-duplicati giornaliero: ogni giorno riparte, stessa offerta non si ripete nella giornata.
+Anti-duplicati giornaliero. Mix casuale categorie. Hashtag categoria cliccabili.
 """
 
 import os
@@ -45,6 +45,8 @@ SEARCH_KEYWORDS = [
     "Giochi e giocattoli",
     "Giardino e giardinaggio",
     "Fai da te",
+    "Stampante 3D",
+    "Filamento 3D",
 ]
 
 
@@ -107,36 +109,27 @@ def parse_item(item):
         try:
             listing = item.offers_v2.listings[0]
             price_obj = listing.price
-
             current_price = price_obj.money.amount
-
             if price_obj.saving_basis and price_obj.saving_basis.money:
                 original_price = price_obj.saving_basis.money.amount
-
             if price_obj.savings:
                 discount_pct = price_obj.savings.percentage
                 if price_obj.savings.money:
                     saving_amount = price_obj.savings.money.amount
-
         except (AttributeError, TypeError, IndexError) as e:
             print("   [SKIP] Errore prezzi {}: {}".format(asin, e))
             return None
 
         if not current_price:
             return None
-
         if not original_price and discount_pct and discount_pct > 0:
             original_price = round(current_price / (1 - discount_pct / 100), 2)
-
         if not discount_pct and original_price and original_price > current_price:
             discount_pct = round(((original_price - current_price) / original_price) * 100)
-
         if not original_price or original_price <= current_price:
             return None
-
         if not saving_amount:
             saving_amount = round(original_price - current_price, 2)
-
         if not discount_pct or discount_pct < MIN_DISCOUNT_PERCENT:
             return None
 
@@ -155,15 +148,10 @@ def parse_item(item):
             pass
 
         return {
-            "asin": asin,
-            "title": title,
-            "current_price": current_price,
-            "original_price": original_price,
-            "discount": saving_amount,
-            "discount_percent": discount_pct,
-            "image_url": image_url,
-            "rating": rating,
-            "review_count": review_count,
+            "asin": asin, "title": title,
+            "current_price": current_price, "original_price": original_price,
+            "discount": saving_amount, "discount_percent": discount_pct,
+            "image_url": image_url, "rating": rating, "review_count": review_count,
         }
     except Exception as e:
         print("[PARSE] Errore: {}".format(e))
@@ -172,77 +160,67 @@ def parse_item(item):
 
 def get_category_emoji(title):
     t = title.lower()
-    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon"]):
-        return "\U0001f3a7"
-    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]):
-        return "\u231a"
-    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel"]):
-        return "\U0001f4f1"
-    if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]):
-        return "\U0001f4bb"
-    if any(w in t for w in ["tablet", "ipad", "kindle"]):
-        return "\U0001f4f2"
-    if any(w in t for w in ["tv ", "television", "monitor", "schermo"]):
-        return "\U0001f4fa"
-    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro"]):
-        return "\U0001f4f7"
-    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal"]):
-        return "\U0001f45f"
-    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito"]):
-        return "\U0001f455"
-    if any(w in t for w in ["borsa", "zaino", "valig", "borsone"]):
-        return "\U0001f45c"
-    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]):
-        return "\U0001f48d"
-    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]):
-        return "\U0001f484"
-    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat"]):
-        return "\U0001f373"
-    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia"]):
-        return "\U0001f9f9"
-    if any(w in t for w in ["lampad", "luce", "led", "illumin"]):
-        return "\U0001f4a1"
-    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller"]):
-        return "\U0001f3ae"
-    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis"]):
-        return "\U0001f3cb"
-    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz"]):
-        return "\U0001f331"
-    if any(w in t for w in ["libro", "romanzo", "manuale"]):
-        return "\U0001f4da"
-    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]):
-        return "\U0001f9f8"
+    if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg", "resina 3d", "ugello"]): return "\U0001f5a8"
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon"]): return "\U0001f3a7"
+    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]): return "\u231a"
+    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel"]): return "\U0001f4f1"
+    if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]): return "\U0001f4bb"
+    if any(w in t for w in ["tablet", "ipad", "kindle"]): return "\U0001f4f2"
+    if any(w in t for w in ["tv ", "television", "monitor", "schermo"]): return "\U0001f4fa"
+    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro"]): return "\U0001f4f7"
+    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal"]): return "\U0001f45f"
+    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito"]): return "\U0001f455"
+    if any(w in t for w in ["borsa", "zaino", "valig", "borsone"]): return "\U0001f45c"
+    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]): return "\U0001f48d"
+    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]): return "\U0001f484"
+    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat"]): return "\U0001f373"
+    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia"]): return "\U0001f9f9"
+    if any(w in t for w in ["lampad", "luce", "led", "illumin"]): return "\U0001f4a1"
+    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller"]): return "\U0001f3ae"
+    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis"]): return "\U0001f3cb"
+    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz"]): return "\U0001f331"
+    if any(w in t for w in ["libro", "romanzo", "manuale"]): return "\U0001f4da"
+    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]): return "\U0001f9f8"
     return "\U0001f4e6"
+
+
+def get_category_hashtag(title):
+    t = title.lower()
+    if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg", "resina 3d", "ugello"]): return "#stampa3d"
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon"]): return "#audio"
+    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]): return "#orologi"
+    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel"]): return "#smartphone"
+    if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]): return "#computer"
+    if any(w in t for w in ["tablet", "ipad", "kindle"]): return "#tablet"
+    if any(w in t for w in ["tv ", "television", "monitor", "schermo"]): return "#tv"
+    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro"]): return "#fotografia"
+    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal"]): return "#scarpe"
+    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito"]): return "#abbigliamento"
+    if any(w in t for w in ["borsa", "zaino", "valig", "borsone"]): return "#borse"
+    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]): return "#gioielli"
+    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]): return "#bellezza"
+    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat"]): return "#cucina"
+    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia"]): return "#casa"
+    if any(w in t for w in ["lampad", "luce", "led", "illumin"]): return "#casa"
+    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller"]): return "#gaming"
+    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis"]): return "#sport"
+    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz"]): return "#giardino"
+    if any(w in t for w in ["libro", "romanzo", "manuale"]): return "#libri"
+    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]): return "#giocattoli"
+    return "#tech"
 
 
 def send_telegram_message(text, image_url=None):
     base_url = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
     try:
         if image_url:
-            resp = requests.post(
-                "{}/sendPhoto".format(base_url),
-                json={
-                    "chat_id": TELEGRAM_CHANNEL_ID,
-                    "photo": image_url,
-                    "caption": text,
-                    "parse_mode": "HTML",
-                },
-                timeout=15,
-            )
+            resp = requests.post("{}/sendPhoto".format(base_url),
+                json={"chat_id": TELEGRAM_CHANNEL_ID, "photo": image_url, "caption": text, "parse_mode": "HTML"}, timeout=15)
             if resp.json().get("ok"):
                 return True
             print("   Foto fallita, invio senza immagine...")
-
-        resp = requests.post(
-            "{}/sendMessage".format(base_url),
-            json={
-                "chat_id": TELEGRAM_CHANNEL_ID,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            },
-            timeout=15,
-        )
+        resp = requests.post("{}/sendMessage".format(base_url),
+            json={"chat_id": TELEGRAM_CHANNEL_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}, timeout=15)
         resp.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:
@@ -255,46 +233,33 @@ def format_deal_message(deal):
     asin = deal["asin"]
     title = deal["title"]
 
-    if pct >= 50:
-        alert = "\U0001f6a8\U0001f6a8\U0001f6a8"
-    elif pct >= 30:
-        alert = "\U0001f6a8\U0001f6a8"
-    else:
-        alert = "\U0001f6a8"
+    if pct >= 50: alert = "\U0001f6a8\U0001f6a8\U0001f6a8"
+    elif pct >= 30: alert = "\U0001f6a8\U0001f6a8"
+    else: alert = "\U0001f6a8"
 
     cat_emoji = get_category_emoji(title)
+    cat_tag = get_category_hashtag(title)
     affiliate_link = "https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)
     clean_link = "https://www.amazon.it/dp/{}".format(asin)
 
     msg = "{alert} <b>SCONTO -{pct}%</b> {alert}\n\n".format(alert=alert, pct=pct)
     msg += "{emoji} <b>{title}</b>\n\n".format(emoji=cat_emoji, title=title[:200])
-    msg += "\U0001f4b0 <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b>\n".format(
-        deal["original_price"], deal["current_price"]
-    )
+    msg += "\U0001f4b0 <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b>\n".format(deal["original_price"], deal["current_price"])
     msg += "\U0001f4b8 Risparmi: {:.2f}\u20ac\n\n".format(deal["discount"])
 
     if deal.get("rating"):
         rc = deal.get("review_count", "")
-        if rc:
-            msg += "\u2b50 {}/5 ({} recensioni)\n\n".format(deal["rating"], rc)
-        else:
-            msg += "\u2b50 {}/5\n\n".format(deal["rating"])
+        msg += "\u2b50 {}/5{}\n\n".format(deal["rating"], " ({} recensioni)".format(rc) if rc else "")
 
     msg += "\U0001f449 <a href=\"{}\">SCOPRI L'OFFERTA SU AMAZON</a>\n\n".format(affiliate_link)
     msg += "{}\n\n".format(clean_link)
     msg += "\u2501" * 15 + "\n"
     msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 Offerte ogni giorno\n"
-    msg += "#offerta #amazon #sconto{}\n".format(pct)
+    msg += "#offerta #amazon #sconto{} {}\n".format(pct, cat_tag)
     msg += "\u26a0\ufe0f <i>Prezzo soggetto a variazioni</i>"
 
     return msg
 
-
-# ============================================================
-# GESTIONE DUPLICATI GIORNALIERA
-# Struttura: {"2026-05-20": ["ASIN1", "ASIN2"], "2026-05-21": [...]}
-# Ogni giorno riparte. Le offerte di ieri possono ripetersi se ancora scontate.
-# ============================================================
 
 def load_posted():
     if POSTED_FILE.exists():
@@ -302,13 +267,8 @@ def load_posted():
             data = json.loads(POSTED_FILE.read_text())
             if isinstance(data, dict):
                 today = datetime.date.today().isoformat()
-                cleaned = {}
-                for k, v in data.items():
-                    if k == today:
-                        cleaned[k] = v
-                return cleaned
-            if isinstance(data, list):
-                return {}
+                return {k: v for k, v in data.items() if k == today}
+            return {}
         except (json.JSONDecodeError, TypeError):
             return {}
     return {}
@@ -332,13 +292,9 @@ def mark_as_posted(posted, asin):
     posted[today].append(asin)
 
 
-# ============================================================
-# MAIN
-# ============================================================
-
 def main():
     today = datetime.date.today().isoformat()
-    print("Sottocosto Oggi Bot v5 - Avvio {}".format(datetime.datetime.now().isoformat()))
+    print("Sottocosto Oggi Bot v7 - Avvio {}".format(datetime.datetime.now().isoformat()))
     print("Data: {}".format(today))
     print("Canale: {}".format(TELEGRAM_CHANNEL_ID))
     print("Partner Tag: {}".format(AMAZON_PARTNER_TAG))
@@ -358,17 +314,14 @@ def main():
 
     api = create_api()
     posted = load_posted()
-
     already_today = len(posted.get(today, []))
     print("Offerte gia pubblicate oggi: {}".format(already_today))
 
-    # Fase 1: raccogli tutte le offerte da tutte le categorie
     all_deals = []
     for keyword in SEARCH_KEYWORDS:
         print("\nCerco offerte: {}".format(keyword))
         deals = search_deals(api, keyword)
         print("   Trovate {} offerte con sconto >= {}%".format(len(deals), MIN_DISCOUNT_PERCENT))
-
         count = 0
         for deal in deals:
             if count >= MAX_POSTS_PER_CATEGORY:
@@ -379,19 +332,13 @@ def main():
                 count += 1
 
     print("\n--- Totale offerte nuove raccolte: {} ---".format(len(all_deals)))
-
-    # Fase 2: mischia le offerte (mix di categorie diverse)
     random.shuffle(all_deals)
 
-    # Fase 3: pubblica in ordine casuale
     new_deals_count = 0
     for deal in all_deals:
-        print("   Pubblico [{}]: {}... (-{}%)".format(
-            deal["_category"], deal["title"][:50], deal["discount_percent"]
-        ))
+        print("   Pubblico [{}]: {}... (-{}%)".format(deal["_category"], deal["title"][:50], deal["discount_percent"]))
         message = format_deal_message(deal)
         success = send_telegram_message(message, deal.get("image_url"))
-
         if success:
             mark_as_posted(posted, deal["asin"])
             new_deals_count += 1
@@ -402,7 +349,7 @@ def main():
 
     save_posted(posted)
     total_today = len(posted.get(today, []))
-    print("\nCompletato! {} nuove offerte pubblicate. Totale oggi: {}".format(new_deals_count, total_today))
+    print("\nCompletato! {} nuove in questo ciclo. Totale oggi: {}".format(new_deals_count, total_today))
 
 
 if __name__ == "__main__":
