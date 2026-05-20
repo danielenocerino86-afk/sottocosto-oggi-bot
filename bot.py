@@ -7,6 +7,7 @@ import os
 import json
 import datetime
 import time
+import random
 import requests
 from pathlib import Path
 
@@ -43,7 +44,6 @@ SEARCH_KEYWORDS = [
     "Giochi e giocattoli",
     "Giardino e giardinaggio",
     "Fai da te",
-    "stampa 3d",
 ]
 
 
@@ -324,35 +324,44 @@ def main():
 
     api = create_api()
     posted = load_posted()
-    new_deals_count = 0
 
+    # Fase 1: raccogli tutte le offerte da tutte le categorie
+    all_deals = []
     for keyword in SEARCH_KEYWORDS:
         print("\nCerco offerte: {}".format(keyword))
         deals = search_deals(api, keyword)
         print("   Trovate {} offerte con sconto >= {}%".format(len(deals), MIN_DISCOUNT_PERCENT))
 
-        published_in_category = 0
+        count = 0
         for deal in deals:
-            if published_in_category >= MAX_POSTS_PER_CATEGORY:
-                print("   Raggiunto limite {} per {}".format(MAX_POSTS_PER_CATEGORY, keyword))
+            if count >= MAX_POSTS_PER_CATEGORY:
                 break
+            if deal["asin"] not in posted:
+                deal["_category"] = keyword
+                all_deals.append(deal)
+                count += 1
 
-            if deal["asin"] in posted:
-                print("   Gia pubblicata: {}".format(deal["asin"]))
-                continue
+    print("\n--- Totale offerte nuove raccolte: {} ---".format(len(all_deals)))
 
-            print("   Pubblico: {}... (-{}%)".format(deal["title"][:60], deal["discount_percent"]))
-            message = format_deal_message(deal)
-            success = send_telegram_message(message, deal.get("image_url"))
+    # Fase 2: mischia le offerte
+    random.shuffle(all_deals)
 
-            if success:
-                posted.add(deal["asin"])
-                new_deals_count += 1
-                published_in_category += 1
-                print("   Pubblicata! (attendo {} sec)".format(POST_INTERVAL_SECONDS))
-                time.sleep(POST_INTERVAL_SECONDS)
-            else:
-                print("   Errore invio")
+    # Fase 3: pubblica in ordine casuale
+    new_deals_count = 0
+    for deal in all_deals:
+        print("   Pubblico [{}]: {}... (-{}%)".format(
+            deal["_category"], deal["title"][:50], deal["discount_percent"]
+        ))
+        message = format_deal_message(deal)
+        success = send_telegram_message(message, deal.get("image_url"))
+
+        if success:
+            posted.add(deal["asin"])
+            new_deals_count += 1
+            print("   Pubblicata! (attendo {} sec)".format(POST_INTERVAL_SECONDS))
+            time.sleep(POST_INTERVAL_SECONDS)
+        else:
+            print("   Errore invio")
 
     save_posted(posted)
     print("\nCompletato! {} nuove offerte pubblicate.".format(new_deals_count))
