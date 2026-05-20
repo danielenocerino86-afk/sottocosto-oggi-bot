@@ -1,6 +1,7 @@
 """
-Sottocosto Oggi - Bot Telegram
+Sottocosto Oggi - Bot Telegram v5
 Recupera offerte da Amazon Creators API e le pubblica su @sottocosto_oggi.
+Anti-duplicati giornaliero: ogni giorno riparte, stessa offerta non si ripete nella giornata.
 """
 
 import os
@@ -23,7 +24,7 @@ AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "20"))
 MAX_POSTS_PER_CATEGORY = 5
-POST_INTERVAL_SECONDS = 60
+POST_INTERVAL_SECONDS = 120
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 
@@ -289,23 +290,56 @@ def format_deal_message(deal):
     return msg
 
 
+# ============================================================
+# GESTIONE DUPLICATI GIORNALIERA
+# Struttura: {"2026-05-20": ["ASIN1", "ASIN2"], "2026-05-21": [...]}
+# Ogni giorno riparte. Le offerte di ieri possono ripetersi se ancora scontate.
+# ============================================================
+
 def load_posted():
     if POSTED_FILE.exists():
         try:
             data = json.loads(POSTED_FILE.read_text())
-            return set(data)
+            if isinstance(data, dict):
+                today = datetime.date.today().isoformat()
+                cleaned = {}
+                for k, v in data.items():
+                    if k == today:
+                        cleaned[k] = v
+                return cleaned
+            if isinstance(data, list):
+                return {}
         except (json.JSONDecodeError, TypeError):
-            return set()
-    return set()
+            return {}
+    return {}
 
 
 def save_posted(posted):
-    recent = list(posted)[-500:]
-    POSTED_FILE.write_text(json.dumps(recent))
+    POSTED_FILE.write_text(json.dumps(posted))
 
+
+def is_already_posted(posted, asin):
+    today = datetime.date.today().isoformat()
+    if today not in posted:
+        posted[today] = []
+    return asin in posted[today]
+
+
+def mark_as_posted(posted, asin):
+    today = datetime.date.today().isoformat()
+    if today not in posted:
+        posted[today] = []
+    posted[today].append(asin)
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
-    print("Sottocosto Oggi Bot - Avvio {}".format(datetime.datetime.now().isoformat()))
+    today = datetime.date.today().isoformat()
+    print("Sottocosto Oggi Bot v5 - Avvio {}".format(datetime.datetime.now().isoformat()))
+    print("Data: {}".format(today))
     print("Canale: {}".format(TELEGRAM_CHANNEL_ID))
     print("Partner Tag: {}".format(AMAZON_PARTNER_TAG))
     print("Sconto minimo: {}%".format(MIN_DISCOUNT_PERCENT))
@@ -325,6 +359,9 @@ def main():
     api = create_api()
     posted = load_posted()
 
+    already_today = len(posted.get(today, []))
+    print("Offerte gia pubblicate oggi: {}".format(already_today))
+
     # Fase 1: raccogli tutte le offerte da tutte le categorie
     all_deals = []
     for keyword in SEARCH_KEYWORDS:
@@ -336,14 +373,14 @@ def main():
         for deal in deals:
             if count >= MAX_POSTS_PER_CATEGORY:
                 break
-            if deal["asin"] not in posted:
+            if not is_already_posted(posted, deal["asin"]):
                 deal["_category"] = keyword
                 all_deals.append(deal)
                 count += 1
 
     print("\n--- Totale offerte nuove raccolte: {} ---".format(len(all_deals)))
 
-    # Fase 2: mischia le offerte
+    # Fase 2: mischia le offerte (mix di categorie diverse)
     random.shuffle(all_deals)
 
     # Fase 3: pubblica in ordine casuale
@@ -356,7 +393,7 @@ def main():
         success = send_telegram_message(message, deal.get("image_url"))
 
         if success:
-            posted.add(deal["asin"])
+            mark_as_posted(posted, deal["asin"])
             new_deals_count += 1
             print("   Pubblicata! (attendo {} sec)".format(POST_INTERVAL_SECONDS))
             time.sleep(POST_INTERVAL_SECONDS)
@@ -364,7 +401,8 @@ def main():
             print("   Errore invio")
 
     save_posted(posted)
-    print("\nCompletato! {} nuove offerte pubblicate.".format(new_deals_count))
+    total_today = len(posted.get(today, []))
+    print("\nCompletato! {} nuove offerte pubblicate. Totale oggi: {}".format(new_deals_count, total_today))
 
 
 if __name__ == "__main__":
