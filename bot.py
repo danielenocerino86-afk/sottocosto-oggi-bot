@@ -60,11 +60,29 @@ def search_deals(api, keyword, max_results=10):
         print("   Nessun risultato per {}".format(keyword))
         return []
 
-    # Debug: mostra attributi del primo item
+     # Debug: mostra struttura offers_v2 del primo item
     first = results.items[0]
-    print("   DEBUG primo item attributi: {}".format(
-        [a for a in dir(first) if not a.startswith('_') and not callable(getattr(first, a, None))]
-    ))
+    try:
+        ov2 = first.offers_v2
+        if ov2:
+            print("   DEBUG offers_v2 type: {}".format(type(ov2)))
+            print("   DEBUG offers_v2 attrs: {}".format([a for a in dir(ov2) if not a.startswith('_')]))
+            if hasattr(ov2, 'listings') and ov2.listings:
+                l0 = ov2.listings[0]
+                print("   DEBUG listing[0] attrs: {}".format([a for a in dir(l0) if not a.startswith('_')]))
+                if hasattr(l0, 'price'):
+                    print("   DEBUG listing[0].price: {}".format(l0.price))
+                if hasattr(l0, 'saving_basis'):
+                    print("   DEBUG listing[0].saving_basis: {}".format(l0.saving_basis))
+            elif hasattr(ov2, 'summaries') and ov2.summaries:
+                s0 = ov2.summaries[0]
+                print("   DEBUG summary[0] attrs: {}".format([a for a in dir(s0) if not a.startswith('_')]))
+            else:
+                print("   DEBUG offers_v2 content: {}".format(ov2))
+        else:
+            print("   DEBUG offers_v2 is None/empty")
+    except Exception as e:
+        print("   DEBUG error: {}".format(e))
 
     deals = []
     for item in results.items:
