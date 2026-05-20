@@ -60,30 +60,6 @@ def search_deals(api, keyword, max_results=10):
         print("   Nessun risultato per {}".format(keyword))
         return []
 
-     # Debug: mostra struttura offers_v2 del primo item
-    first = results.items[0]
-    try:
-        ov2 = first.offers_v2
-        if ov2:
-            print("   DEBUG offers_v2 type: {}".format(type(ov2)))
-            print("   DEBUG offers_v2 attrs: {}".format([a for a in dir(ov2) if not a.startswith('_')]))
-            if hasattr(ov2, 'listings') and ov2.listings:
-                l0 = ov2.listings[0]
-                print("   DEBUG listing[0] attrs: {}".format([a for a in dir(l0) if not a.startswith('_')]))
-                if hasattr(l0, 'price'):
-                    print("   DEBUG listing[0].price: {}".format(l0.price))
-                if hasattr(l0, 'saving_basis'):
-                    print("   DEBUG listing[0].saving_basis: {}".format(l0.saving_basis))
-            elif hasattr(ov2, 'summaries') and ov2.summaries:
-                s0 = ov2.summaries[0]
-                print("   DEBUG summary[0] attrs: {}".format([a for a in dir(s0) if not a.startswith('_')]))
-            else:
-                print("   DEBUG offers_v2 content: {}".format(ov2))
-        else:
-            print("   DEBUG offers_v2 is None/empty")
-    except Exception as e:
-        print("   DEBUG error: {}".format(e))
-
     deals = []
     for item in results.items:
         deal = parse_item(item)
@@ -97,9 +73,10 @@ def parse_item(item):
     try:
         asin = item.asin
         title = None
-        url = None
         current_price = None
         original_price = None
+        discount_pct = None
+        saving_amount = None
         image_url = None
 
         # Titolo
@@ -108,122 +85,65 @@ def parse_item(item):
         except (AttributeError, TypeError):
             pass
 
-        # URL
-        try:
-            url = item.detail_page_url
-        except (AttributeError, TypeError):
-            pass
-
         if not asin or not title:
             return None
 
-        # === METODO 1: item.prices (wrapper semplificato) ===
+        # Prezzi da offers_v2.listings[0].price
         try:
-            if hasattr(item, 'prices') and item.prices:
-                if hasattr(item.prices, 'price') and item.prices.price:
-                    current_price = item.prices.price.amount if hasattr(item.prices.price, 'amount') else item.prices.price
-                if hasattr(item.prices, 'price_savings') and item.prices.price_savings:
-                    original_price_calc = None
-                    if hasattr(item.prices.price_savings, 'amount') and current_price:
-                        saving = item.prices.price_savings.amount
-                        original_price_calc = current_price + saving
-                    if original_price_calc:
-                        original_price = original_price_calc
-                if hasattr(item.prices, 'saving_basis') and item.prices.saving_basis:
-                    sb = item.prices.saving_basis
-                    original_price = sb.amount if hasattr(sb, 'amount') else sb
-        except (AttributeError, TypeError) as e:
-            print("   [DEBUG] prices method error: {}".format(e))
+            listing = item.offers_v2.listings[0]
+            price_obj = listing.price
 
-        # === METODO 2: item.offers.listings ===
-        if not current_price:
-            try:
-                if hasattr(item, 'offers') and item.offers:
-                    listings = item.offers.listings if hasattr(item.offers, 'listings') else None
-                    if listings and len(listings) > 0:
-                        listing = listings[0]
-                        if hasattr(listing, 'price') and listing.price:
-                            current_price = listing.price.amount
-                        if hasattr(listing, 'saving_basis') and listing.saving_basis:
-                            original_price = listing.saving_basis.amount
-            except (AttributeError, TypeError, IndexError) as e:
-                print("   [DEBUG] offers method error: {}".format(e))
+            # Prezzo attuale: price.money.amount
+            current_price = price_obj.money.amount
 
-        # === METODO 3: item.offers.summaries ===
-        if not current_price:
-            try:
-                if hasattr(item, 'offers') and item.offers:
-                    summaries = item.offers.summaries if hasattr(item.offers, 'summaries') else None
-                    if summaries and len(summaries) > 0:
-                        s = summaries[0]
-                        if hasattr(s, 'lowest_price') and s.lowest_price:
-                            current_price = s.lowest_price.amount
-                        if hasattr(s, 'highest_price') and s.highest_price:
-                            original_price = s.highest_price.amount
-            except (AttributeError, TypeError, IndexError) as e:
-                print("   [DEBUG] summaries method error: {}".format(e))
+            # Prezzo originale: price.saving_basis.money.amount
+            if price_obj.saving_basis and price_obj.saving_basis.money:
+                original_price = price_obj.saving_basis.money.amount
 
-        # === METODO 4: accesso diretto a attributi raw ===
-        if not current_price:
-            for attr_name in ['price', 'current_price', 'buybox_price']:
-                try:
-                    val = getattr(item, attr_name, None)
-                    if val:
-                        current_price = val.amount if hasattr(val, 'amount') else float(val)
-                        break
-                except (AttributeError, TypeError, ValueError):
-                    continue
+            # Sconto %: price.savings.percentage
+            if price_obj.savings:
+                discount_pct = price_obj.savings.percentage
+                if price_obj.savings.money:
+                    saving_amount = price_obj.savings.money.amount
 
-        if not current_price:
-            print("   [SKIP] No price for: {}".format(asin))
+        except (AttributeError, TypeError, IndexError) as e:
+            print("   [SKIP] Errore prezzi {}: {}".format(asin, e))
             return None
 
-        # Se non ho il prezzo originale ma il prodotto ha il saving percent
-        if not original_price or original_price <= current_price:
-            try:
-                if hasattr(item, 'prices') and item.prices:
-                    if hasattr(item.prices, 'percentage_saved') and item.prices.percentage_saved:
-                        pct = item.prices.percentage_saved
-                        if pct > 0:
-                            original_price = round(current_price / (1 - pct / 100), 2)
-            except (AttributeError, TypeError):
-                pass
+        if not current_price:
+            print("   [SKIP] No price: {}".format(asin))
+            return None
+
+        # Se non ho il prezzo originale ma ho lo sconto %, lo calcolo
+        if not original_price and discount_pct and discount_pct > 0:
+            original_price = round(current_price / (1 - discount_pct / 100), 2)
+
+        # Se non ho lo sconto % ma ho entrambi i prezzi, lo calcolo
+        if not discount_pct and original_price and original_price > current_price:
+            discount_pct = round(((original_price - current_price) / original_price) * 100)
 
         if not original_price or original_price <= current_price:
             return None
 
-        discount = round(original_price - current_price, 2)
-        discount_percent = round((discount / original_price) * 100)
+        if not saving_amount:
+            saving_amount = round(original_price - current_price, 2)
+
+        if not discount_pct or discount_pct < MIN_DISCOUNT_PERCENT:
+            return None
 
         # Immagine
         try:
-            if hasattr(item, 'images') and item.images:
-                if hasattr(item.images, 'primary') and item.images.primary:
-                    if hasattr(item.images.primary, 'large') and item.images.primary.large:
-                        image_url = item.images.primary.large.url
+            image_url = item.images.primary.large.url
         except (AttributeError, TypeError):
             pass
-
-        # Fallback immagine: image_large del wrapper
-        if not image_url:
-            try:
-                image_url = item.image_large if hasattr(item, 'image_large') else None
-            except (AttributeError, TypeError):
-                pass
-
-        # Costruisci link affiliato con tag
-        affiliate_url = "https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)
-        clean_url = "https://www.amazon.it/dp/{}".format(asin)
 
         return {
             "asin": asin,
             "title": title,
-            "url": affiliate_url,
-            "clean_url": clean_url,
             "current_price": current_price,
             "original_price": original_price,
-            "discount": discount,
-            "discount_percent": discount_percent,
+            "discount": saving_amount,
+            "discount_percent": discount_pct,
             "image_url": image_url,
         }
     except Exception as e:
@@ -253,6 +173,7 @@ def send_telegram_message(text):
 
 def format_deal_message(deal):
     pct = deal["discount_percent"]
+    asin = deal["asin"]
 
     if pct >= 50:
         fire = "\U0001f525\U0001f525\U0001f525"
@@ -261,14 +182,17 @@ def format_deal_message(deal):
     else:
         fire = "\U0001f525"
 
+    affiliate_link = "https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)
+    clean_link = "https://www.amazon.it/dp/{}".format(asin)
+
     msg = "{fire} <b>-{pct}%</b> {fire}\n\n".format(fire=fire, pct=pct)
     msg += "\U0001f4e6 <b>{}</b>\n\n".format(deal["title"][:200])
     msg += "\U0001f4b0 <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b>\n".format(
         deal["original_price"], deal["current_price"]
     )
     msg += "\U0001f4b8 Risparmi: {:.2f}\u20ac\n\n".format(deal["discount"])
-    msg += '\U0001f6d2 <a href="{}">VAI ALL\'OFFERTA</a>\n\n'.format(deal["url"])
-    msg += "{}\n\n".format(deal["clean_url"])
+    msg += '\U0001f6d2 <a href="{}">VAI ALL\'OFFERTA</a>\n\n'.format(affiliate_link)
+    msg += "{}\n\n".format(clean_link)
     msg += "\u2501" * 15 + "\n"
     msg += "\U0001f4e3 @sottocosto_oggi\n"
     msg += "#offerta #amazon #sconto{}".format(pct)
