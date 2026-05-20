@@ -23,7 +23,7 @@ AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "20"))
 MAX_POSTS_PER_CATEGORY = 5
-POST_INTERVAL_SECONDS = 120
+POST_INTERVAL_SECONDS = 60
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 
