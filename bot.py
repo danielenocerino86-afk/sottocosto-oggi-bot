@@ -1,7 +1,7 @@
 """
-Sottocosto Oggi - Bot Telegram v7
-Recupera offerte da Amazon Creators API e le pubblica su @sottocosto_oggi.
-Anti-duplicati giornaliero. Mix casuale categorie. Hashtag categoria cliccabili.
+Sottocosto Oggi - Bot Telegram v10
+Pubblica dalle 07:00 alle 00:00 (ora italiana). Stop di notte.
+Anti-duplicati giornaliero. Mix casuale. Stelle rating.
 """
 
 import os
@@ -23,12 +23,20 @@ AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "20"))
-MAX_POSTS_PER_CATEGORY = 5
-POST_INTERVAL_SECONDS = 120
+MAX_POSTS_PER_CATEGORY = 3
+MAX_POSTS_TOTAL = 25
+POST_INTERVAL_SECONDS = 60
+
+# Orari di pubblicazione (ora italiana UTC+2)
+PUBLISH_START_HOUR = 7   # 07:00
+PUBLISH_END_HOUR = 0     # 00:00 (mezzanotte)
+TIMEZONE_OFFSET = 2      # UTC+2 (Italia estate)
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 
 SEARCH_KEYWORDS = [
+    "Smartphone",
+    "Telefonia accessori",
     "Abbigliamento uomo",
     "Abbigliamento donna",
     "Scarpe",
@@ -39,15 +47,37 @@ SEARCH_KEYWORDS = [
     "Orologi",
     "Elettronica",
     "Informatica",
+    "Tablet",
     "Casa e cucina",
+    "Casa intelligente smart home",
+    "Illuminazione",
     "Sport e tempo libero",
     "Videogiochi",
     "Giochi e giocattoli",
     "Giardino e giardinaggio",
     "Fai da te",
+    "Animali domestici",
+    "Auto e moto accessori",
+    "Salute e cura persona",
+    "Valigie e borse viaggio",
     "Stampante 3D",
     "Filamento 3D",
 ]
+
+
+def get_italy_hour():
+    """Restituisce l'ora corrente in Italia (UTC+2 estate, UTC+1 inverno)."""
+    utc_now = datetime.datetime.utcnow()
+    italy_now = utc_now + datetime.timedelta(hours=TIMEZONE_OFFSET)
+    return italy_now.hour, italy_now
+
+
+def is_publish_time():
+    """Controlla se siamo nell'orario di pubblicazione (07:00 - 00:00)."""
+    hour, now = get_italy_hour()
+    # 07:00 - 23:59 = pubblicare. 00:00 - 06:59 = stop.
+    return hour >= PUBLISH_START_HOUR
+    # Nota: PUBLISH_END_HOUR = 0 (mezzanotte) = qualsiasi ora >= 7 e' ok
 
 
 def create_api():
@@ -74,7 +104,6 @@ def search_deals(api, keyword, max_results=10):
         return []
 
     if not results or not results.items:
-        print("   Nessun risultato per {}".format(keyword))
         return []
 
     deals = []
@@ -116,8 +145,7 @@ def parse_item(item):
                 discount_pct = price_obj.savings.percentage
                 if price_obj.savings.money:
                     saving_amount = price_obj.savings.money.amount
-        except (AttributeError, TypeError, IndexError) as e:
-            print("   [SKIP] Errore prezzi {}: {}".format(asin, e))
+        except (AttributeError, TypeError, IndexError):
             return None
 
         if not current_price:
@@ -161,52 +189,58 @@ def parse_item(item):
 def get_category_emoji(title):
     t = title.lower()
     if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg", "resina 3d", "ugello"]): return "\U0001f5a8"
-    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon"]): return "\U0001f3a7"
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon", "soundbar"]): return "\U0001f3a7"
     if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]): return "\u231a"
-    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel"]): return "\U0001f4f1"
+    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel", "custodia telefono", "cover telefono"]): return "\U0001f4f1"
     if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]): return "\U0001f4bb"
     if any(w in t for w in ["tablet", "ipad", "kindle"]): return "\U0001f4f2"
-    if any(w in t for w in ["tv ", "television", "monitor", "schermo"]): return "\U0001f4fa"
-    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro"]): return "\U0001f4f7"
-    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal"]): return "\U0001f45f"
-    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito"]): return "\U0001f455"
-    if any(w in t for w in ["borsa", "zaino", "valig", "borsone"]): return "\U0001f45c"
+    if any(w in t for w in ["tv ", "television", "monitor", "schermo", "fire tv", "streaming"]): return "\U0001f4fa"
+    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro", "drone"]): return "\U0001f4f7"
+    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal", "mocassin", "ciabatt"]): return "\U0001f45f"
+    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito", "gonna", "shorts"]): return "\U0001f455"
+    if any(w in t for w in ["borsa", "zaino", "valig", "borsone", "trolley", "bagaglio"]): return "\U0001f45c"
     if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]): return "\U0001f48d"
-    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]): return "\U0001f484"
-    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat"]): return "\U0001f373"
-    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia"]): return "\U0001f9f9"
-    if any(w in t for w in ["lampad", "luce", "led", "illumin"]): return "\U0001f4a1"
-    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller"]): return "\U0001f3ae"
-    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis"]): return "\U0001f3cb"
-    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz"]): return "\U0001f331"
+    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo", "maschera viso", "rossetto"]): return "\U0001f484"
+    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat", "caffettier"]): return "\U0001f373"
+    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia", "scopa"]): return "\U0001f9f9"
+    if any(w in t for w in ["lampad", "luce", "led", "illumin", "smart light"]): return "\U0001f4a1"
+    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller", "gaming"]): return "\U0001f3ae"
+    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis", "yoga", "corsa"]): return "\U0001f3cb"
+    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz", "barbecue"]): return "\U0001f331"
     if any(w in t for w in ["libro", "romanzo", "manuale"]): return "\U0001f4da"
-    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]): return "\U0001f9f8"
+    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego", "puzzle"]): return "\U0001f9f8"
+    if any(w in t for w in ["cane", "gatto", "animale", "pet", "guinzaglio", "crocchin", "antiparassit"]): return "\U0001f43e"
+    if any(w in t for w in ["auto", "moto", "automobile", "tergicristal", "dashcam", "caricatore auto"]): return "\U0001f697"
+    if any(w in t for w in ["alexa", "echo", "smart home", "domotica", "presa smart", "termostato"]): return "\U0001f3e0"
     return "\U0001f4e6"
 
 
 def get_category_hashtag(title):
     t = title.lower()
     if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg", "resina 3d", "ugello"]): return "#stampa3d"
-    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon"]): return "#audio"
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon", "soundbar"]): return "#audio"
     if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]): return "#orologi"
-    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel"]): return "#smartphone"
+    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel", "custodia telefono", "cover telefono"]): return "#smartphone"
     if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]): return "#computer"
     if any(w in t for w in ["tablet", "ipad", "kindle"]): return "#tablet"
-    if any(w in t for w in ["tv ", "television", "monitor", "schermo"]): return "#tv"
-    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro"]): return "#fotografia"
-    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal"]): return "#scarpe"
-    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito"]): return "#abbigliamento"
-    if any(w in t for w in ["borsa", "zaino", "valig", "borsone"]): return "#borse"
+    if any(w in t for w in ["tv ", "television", "monitor", "schermo", "fire tv", "streaming"]): return "#tv"
+    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro", "drone"]): return "#fotografia"
+    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal", "mocassin", "ciabatt"]): return "#scarpe"
+    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito", "gonna", "shorts"]): return "#abbigliamento"
+    if any(w in t for w in ["borsa", "zaino", "valig", "borsone", "trolley", "bagaglio"]): return "#borse"
     if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]): return "#gioielli"
-    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]): return "#bellezza"
-    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat"]): return "#cucina"
-    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia"]): return "#casa"
-    if any(w in t for w in ["lampad", "luce", "led", "illumin"]): return "#casa"
-    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller"]): return "#gaming"
-    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis"]): return "#sport"
-    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz"]): return "#giardino"
+    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo", "maschera viso", "rossetto"]): return "#bellezza"
+    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat", "caffettier"]): return "#cucina"
+    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia", "scopa"]): return "#casa"
+    if any(w in t for w in ["lampad", "luce", "led", "illumin", "smart light"]): return "#casa"
+    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller", "gaming"]): return "#gaming"
+    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis", "yoga", "corsa"]): return "#sport"
+    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz", "barbecue"]): return "#giardino"
     if any(w in t for w in ["libro", "romanzo", "manuale"]): return "#libri"
-    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]): return "#giocattoli"
+    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego", "puzzle"]): return "#giocattoli"
+    if any(w in t for w in ["cane", "gatto", "animale", "pet", "guinzaglio", "crocchin", "antiparassit"]): return "#animali"
+    if any(w in t for w in ["auto", "moto", "automobile", "tergicristal", "dashcam", "caricatore auto"]): return "#auto"
+    if any(w in t for w in ["alexa", "echo", "smart home", "domotica", "presa smart", "termostato"]): return "#smarthome"
     return "#tech"
 
 
@@ -248,8 +282,15 @@ def format_deal_message(deal):
     msg += "\U0001f4b8 Risparmi: {:.2f}\u20ac\n\n".format(deal["discount"])
 
     if deal.get("rating"):
-        rc = deal.get("review_count", "")
-        msg += "\u2b50 {}/5{}\n\n".format(deal["rating"], " ({} recensioni)".format(rc) if rc else "")
+        try:
+            r = float(deal["rating"])
+            full = int(r)
+            empty = 5 - full
+            stars = "\u2B50" * full + "\u2606" * empty
+            rc = deal.get("review_count", "")
+            msg += "{} {}/5{}\n\n".format(stars, deal["rating"], " ({} recensioni)".format(rc) if rc else "")
+        except (ValueError, TypeError):
+            pass
 
     msg += "\U0001f449 <a href=\"{}\">SCOPRI L'OFFERTA SU AMAZON</a>\n\n".format(affiliate_link)
     msg += "{}\n\n".format(clean_link)
@@ -289,19 +330,25 @@ def mark_as_posted(posted, asin):
     today = datetime.date.today().isoformat()
     if today not in posted:
         posted[today] = []
-    posted[today].append(asin)
+    if asin not in posted[today]:
+        posted[today].append(asin)
 
 
 def main():
+    hour, italy_now = get_italy_hour()
     today = datetime.date.today().isoformat()
-    print("Sottocosto Oggi Bot v7 - Avvio {}".format(datetime.datetime.now().isoformat()))
-    print("Data: {}".format(today))
-    print("Canale: {}".format(TELEGRAM_CHANNEL_ID))
-    print("Partner Tag: {}".format(AMAZON_PARTNER_TAG))
-    print("Sconto minimo: {}%".format(MIN_DISCOUNT_PERCENT))
-    print("Max post per categoria: {}".format(MAX_POSTS_PER_CATEGORY))
-    print("Intervallo tra post: {} secondi".format(POST_INTERVAL_SECONDS))
-    print("Categorie: {}".format(len(SEARCH_KEYWORDS)))
+
+    print("Sottocosto Oggi Bot v10 - {}".format(datetime.datetime.now().isoformat()))
+    print("Ora italiana: {} ({})".format(italy_now.strftime("%H:%M"), "UTC+{}".format(TIMEZONE_OFFSET)))
+    print("Finestra pubblicazione: {:02d}:00 - 00:00".format(PUBLISH_START_HOUR))
+
+    # Controlla orario
+    if not is_publish_time():
+        print("Fuori orario ({}:00). Il bot pubblica dalle {:02d}:00 alle 00:00. Stop.".format(hour, PUBLISH_START_HOUR))
+        return
+
+    print("Orario OK. Sconto min: {}% | Max/cat: {} | Max tot: {} | Intervallo: {}s".format(
+        MIN_DISCOUNT_PERCENT, MAX_POSTS_PER_CATEGORY, MAX_POSTS_TOTAL, POST_INTERVAL_SECONDS))
 
     missing = []
     for var in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
@@ -315,41 +362,62 @@ def main():
     api = create_api()
     posted = load_posted()
     already_today = len(posted.get(today, []))
-    print("Offerte gia pubblicate oggi: {}".format(already_today))
+    print("Gia pubblicate oggi: {}".format(already_today))
 
     all_deals = []
-    for keyword in SEARCH_KEYWORDS:
-        print("\nCerco offerte: {}".format(keyword))
-        deals = search_deals(api, keyword)
-        print("   Trovate {} offerte con sconto >= {}%".format(len(deals), MIN_DISCOUNT_PERCENT))
-        count = 0
-        for deal in deals:
-            if count >= MAX_POSTS_PER_CATEGORY:
-                break
-            if not is_already_posted(posted, deal["asin"]):
-                deal["_category"] = keyword
-                all_deals.append(deal)
-                count += 1
+    seen_asins = set(posted.get(today, []))
 
-    print("\n--- Totale offerte nuove raccolte: {} ---".format(len(all_deals)))
+    for keyword in SEARCH_KEYWORDS:
+        deals = search_deals(api, keyword)
+        new_count = 0
+        for deal in deals:
+            if new_count >= MAX_POSTS_PER_CATEGORY:
+                break
+            asin = deal["asin"]
+            if asin in seen_asins:
+                continue
+            seen_asins.add(asin)
+            deal["_category"] = keyword
+            all_deals.append(deal)
+            new_count += 1
+        if deals:
+            print("  {} -> {} nuove".format(keyword, new_count))
+
+    print("\nOfferte nuove e uniche: {}".format(len(all_deals)))
+
+    if not all_deals:
+        print("Nessuna offerta nuova. Fine.")
+        return
+
     random.shuffle(all_deals)
+
+    if len(all_deals) > MAX_POSTS_TOTAL:
+        all_deals = all_deals[:MAX_POSTS_TOTAL]
+        print("Limitato a {} offerte".format(MAX_POSTS_TOTAL))
 
     new_deals_count = 0
     for deal in all_deals:
-        print("   Pubblico [{}]: {}... (-{}%)".format(deal["_category"], deal["title"][:50], deal["discount_percent"]))
+        # Ricontrolla orario prima di ogni invio
+        if not is_publish_time():
+            print("Orario scaduto. Stop pubblicazione.")
+            break
+
+        if is_already_posted(posted, deal["asin"]):
+            continue
+
+        print("  [{}] {}... (-{}%)".format(deal["_category"], deal["title"][:50], deal["discount_percent"]))
         message = format_deal_message(deal)
         success = send_telegram_message(message, deal.get("image_url"))
         if success:
             mark_as_posted(posted, deal["asin"])
+            save_posted(posted)
             new_deals_count += 1
-            print("   Pubblicata! (attendo {} sec)".format(POST_INTERVAL_SECONDS))
             time.sleep(POST_INTERVAL_SECONDS)
         else:
-            print("   Errore invio")
+            print("  Errore invio")
 
-    save_posted(posted)
     total_today = len(posted.get(today, []))
-    print("\nCompletato! {} nuove in questo ciclo. Totale oggi: {}".format(new_deals_count, total_today))
+    print("\nFatto! {} nuove. Totale oggi: {}".format(new_deals_count, total_today))
 
 
 if __name__ == "__main__":
