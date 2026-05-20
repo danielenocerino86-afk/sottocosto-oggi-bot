@@ -27,11 +27,22 @@ POST_INTERVAL_SECONDS = 120
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 
 SEARCH_KEYWORDS = [
+    "Abbigliamento uomo",
+    "Abbigliamento donna",
+    "Scarpe",
+    "Borse donna",
+    "Bellezza e cosmetica",
+    "Cura della persona",
+    "Gioielli",
+    "Orologi",
     "Elettronica",
     "Informatica",
     "Casa e cucina",
     "Sport e tempo libero",
     "Videogiochi",
+    "Giochi e giocattoli",
+    "Giardino e giardinaggio",
+    "Fai da te",
 ]
 
 
