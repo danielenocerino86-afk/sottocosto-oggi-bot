@@ -43,6 +43,7 @@ SEARCH_KEYWORDS = [
     "Giochi e giocattoli",
     "Giardino e giardinaggio",
     "Fai da te",
+    "stampa 3d",
 ]
 
 
@@ -91,6 +92,8 @@ def parse_item(item):
         discount_pct = None
         saving_amount = None
         image_url = None
+        rating = None
+        review_count = None
 
         try:
             title = item.item_info.title.display_value
@@ -141,6 +144,15 @@ def parse_item(item):
         except (AttributeError, TypeError):
             pass
 
+        try:
+            if item.customer_reviews:
+                if hasattr(item.customer_reviews, 'star_rating') and item.customer_reviews.star_rating:
+                    rating = item.customer_reviews.star_rating.value
+                if hasattr(item.customer_reviews, 'count') and item.customer_reviews.count:
+                    review_count = item.customer_reviews.count
+        except (AttributeError, TypeError):
+            pass
+
         return {
             "asin": asin,
             "title": title,
@@ -149,10 +161,57 @@ def parse_item(item):
             "discount": saving_amount,
             "discount_percent": discount_pct,
             "image_url": image_url,
+            "rating": rating,
+            "review_count": review_count,
         }
     except Exception as e:
         print("[PARSE] Errore: {}".format(e))
         return None
+
+
+def get_category_emoji(title):
+    t = title.lower()
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon"]):
+        return "\U0001f3a7"
+    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]):
+        return "\u231a"
+    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel"]):
+        return "\U0001f4f1"
+    if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]):
+        return "\U0001f4bb"
+    if any(w in t for w in ["tablet", "ipad", "kindle"]):
+        return "\U0001f4f2"
+    if any(w in t for w in ["tv ", "television", "monitor", "schermo"]):
+        return "\U0001f4fa"
+    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro"]):
+        return "\U0001f4f7"
+    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal"]):
+        return "\U0001f45f"
+    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito"]):
+        return "\U0001f455"
+    if any(w in t for w in ["borsa", "zaino", "valig", "borsone"]):
+        return "\U0001f45c"
+    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]):
+        return "\U0001f48d"
+    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]):
+        return "\U0001f484"
+    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat"]):
+        return "\U0001f373"
+    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia"]):
+        return "\U0001f9f9"
+    if any(w in t for w in ["lampad", "luce", "led", "illumin"]):
+        return "\U0001f4a1"
+    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller"]):
+        return "\U0001f3ae"
+    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis"]):
+        return "\U0001f3cb"
+    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "irrigaz"]):
+        return "\U0001f331"
+    if any(w in t for w in ["libro", "romanzo", "manuale"]):
+        return "\U0001f4da"
+    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]):
+        return "\U0001f9f8"
+    return "\U0001f4e6"
 
 
 def send_telegram_message(text, image_url=None):
@@ -193,28 +252,39 @@ def send_telegram_message(text, image_url=None):
 def format_deal_message(deal):
     pct = deal["discount_percent"]
     asin = deal["asin"]
+    title = deal["title"]
 
     if pct >= 50:
-        fire = "\U0001f525\U0001f525\U0001f525"
+        alert = "\U0001f6a8\U0001f6a8\U0001f6a8"
     elif pct >= 30:
-        fire = "\U0001f525\U0001f525"
+        alert = "\U0001f6a8\U0001f6a8"
     else:
-        fire = "\U0001f525"
+        alert = "\U0001f6a8"
 
+    cat_emoji = get_category_emoji(title)
     affiliate_link = "https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)
     clean_link = "https://www.amazon.it/dp/{}".format(asin)
 
-    msg = "{fire} <b>-{pct}%</b> {fire}\n\n".format(fire=fire, pct=pct)
-    msg += "\U0001f4e6 <b>{}</b>\n\n".format(deal["title"][:200])
+    msg = "{alert} <b>SCONTO -{pct}%</b> {alert}\n\n".format(alert=alert, pct=pct)
+    msg += "{emoji} <b>{title}</b>\n\n".format(emoji=cat_emoji, title=title[:200])
     msg += "\U0001f4b0 <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b>\n".format(
         deal["original_price"], deal["current_price"]
     )
     msg += "\U0001f4b8 Risparmi: {:.2f}\u20ac\n\n".format(deal["discount"])
-    msg += '\U0001f6d2 <a href="{}">VAI ALL\'OFFERTA</a>\n\n'.format(affiliate_link)
+
+    if deal.get("rating"):
+        rc = deal.get("review_count", "")
+        if rc:
+            msg += "\u2b50 {}/5 ({} recensioni)\n\n".format(deal["rating"], rc)
+        else:
+            msg += "\u2b50 {}/5\n\n".format(deal["rating"])
+
+    msg += "\U0001f449 <a href=\"{}\">SCOPRI L'OFFERTA SU AMAZON</a>\n\n".format(affiliate_link)
     msg += "{}\n\n".format(clean_link)
     msg += "\u2501" * 15 + "\n"
-    msg += "\U0001f4e3 @sottocosto_oggi\n"
-    msg += "#offerta #amazon #sconto{}".format(pct)
+    msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 Offerte ogni giorno\n"
+    msg += "#offerta #amazon #sconto{}\n".format(pct)
+    msg += "\u26a0\ufe0f <i>Prezzo soggetto a variazioni</i>"
 
     return msg
 
@@ -241,6 +311,7 @@ def main():
     print("Sconto minimo: {}%".format(MIN_DISCOUNT_PERCENT))
     print("Max post per categoria: {}".format(MAX_POSTS_PER_CATEGORY))
     print("Intervallo tra post: {} secondi".format(POST_INTERVAL_SECONDS))
+    print("Categorie: {}".format(len(SEARCH_KEYWORDS)))
 
     missing = []
     for var in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
