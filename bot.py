@@ -1,6 +1,6 @@
 """
-Sottocosto Oggi - Bot Telegram v14 FINAL
-Fix: orari a range, intervallo 3min, dedup robusto, keyword trending, tutto funzionante.
+Sottocosto Oggi - Bot Telegram v15
+Fix timeout: meno keyword per ciclo, max 10 offerte, log dettagliato.
 """
 
 import os
@@ -9,6 +9,7 @@ import datetime
 import time
 import random
 import re
+import sys
 import requests
 from pathlib import Path
 
@@ -22,23 +23,21 @@ AMAZON_CREDENTIAL_ID = os.environ.get("AMAZON_CREDENTIAL_ID", "")
 AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
-MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "30"))
+MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "20"))
 FLASH_DEAL_PERCENT = 50
 MIN_PRICE = 5.0
 MAX_POSTS_PER_CATEGORY = 2
-MAX_POSTS_TOTAL = 15
+MAX_POSTS_TOTAL = 10
 POST_INTERVAL_SECONDS = 300   # 5 minuti tra offerte normali
 FLASH_INTERVAL_SECONDS = 120  # 2 minuti per flash deal
 
 PUBLISH_START_HOUR = 7
-PUBLISH_END_HOUR = 23  # 23:59 poi stop
+PUBLISH_END_HOUR = 23
 TIMEZONE_OFFSET = 2
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 STATS_FILE = Path(__file__).parent / "daily_stats.json"
 
-# Keyword divise in gruppi — ogni ciclo ne sceglie un sottoinsieme random
-# cosi non cerca sempre le stesse cose
 KEYWORD_GROUPS = {
     "moda": [
         "Abbigliamento uomo estate",
@@ -65,8 +64,6 @@ KEYWORD_GROUPS = {
         "Tablet Android",
         "Laptop portatile",
         "Monitor PC",
-        "Webcam HD",
-        "SSD NVMe",
         "Power bank",
         "Caricatore USB-C",
     ],
@@ -75,10 +72,8 @@ KEYWORD_GROUPS = {
         "Robot aspirapolvere",
         "Friggitrice ad aria",
         "Macchina caffe",
-        "Aspirapolvere senza fili",
         "Smart home Alexa",
         "Illuminazione LED",
-        "Climatizzatore portatile",
         "Ventilatore silenzioso",
     ],
     "tempo_libero": [
@@ -88,19 +83,14 @@ KEYWORD_GROUPS = {
         "Giocattoli bambini",
         "Giardino giardinaggio",
         "Bicicletta",
-        "Tappetino yoga",
     ],
     "altro": [
         "Animali domestici cane",
-        "Animali domestici gatto",
         "Auto accessori",
         "Valigia viaggio",
-        "Zaino scuola",
         "Stampante 3D",
-        "Filamento PLA",
         "Mobili arredamento",
         "Materasso memory",
-        "Strumenti musicali",
         "Prodotti neonati",
     ],
 }
@@ -123,12 +113,12 @@ GOOD_MORNING = [
 ]
 
 
-# ============================================================
-# UTILITY
-# ============================================================
+def log(msg):
+    print(msg, flush=True)
+
 
 def get_italy_now():
-    return datetime.datetime.utcnow() + datetime.timedelta(hours=TIMEZONE_OFFSET)
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
 
 
 def is_publish_time():
@@ -137,11 +127,9 @@ def is_publish_time():
 
 
 def select_keywords():
-    """Seleziona un sottoinsieme random di keyword per questo ciclo."""
     selected = []
     for group_name, keywords in KEYWORD_GROUPS.items():
-        # Prende 2-4 keyword random da ogni gruppo
-        n = min(len(keywords), random.randint(2, 4))
+        n = min(len(keywords), random.randint(1, 2))
         selected.extend(random.sample(keywords, n))
     random.shuffle(selected)
     return selected
@@ -165,7 +153,7 @@ def is_spam_title(title):
         return True
     if sum(1 for c in title if 0x4E00 < ord(c) < 0x9FFF) > 3:
         return True
-    if any(w in title.lower() for w in ["clicca qui", "compra ora", "gratis 100%", "buy now", "act now"]):
+    if any(w in title.lower() for w in ["clicca qui", "compra ora", "gratis 100%", "buy now"]):
         return True
     return False
 
@@ -181,10 +169,6 @@ def create_api():
     )
 
 
-# ============================================================
-# RICERCA
-# ============================================================
-
 def search_deals(api, keyword, max_results=10):
     try:
         results = api.search_items(
@@ -194,7 +178,7 @@ def search_deals(api, keyword, max_results=10):
             min_saving_percent=MIN_DISCOUNT_PERCENT,
         )
     except Exception as e:
-        print("[ERR] {}: {}".format(keyword, e))
+        log("[ERR] {}: {}".format(keyword, e))
         return []
     if not results or not results.items:
         return []
@@ -271,13 +255,9 @@ def parse_item(item):
             "discount": saving_amount, "discount_percent": discount_pct,
             "image_url": image_url, "rating": rating, "review_count": review_count,
         }
-    except Exception as e:
+    except Exception:
         return None
 
-
-# ============================================================
-# EMOJI E HASHTAG (animali PRIMA di abbigliamento)
-# ============================================================
 
 def get_category_emoji(title):
     t = title.lower()
@@ -289,7 +269,7 @@ def get_category_emoji(title):
     if any(w in t for w in ["tablet", "ipad", "kindle"]): return "\U0001f4f2"
     if any(w in t for w in ["tv ", "television", "monitor", "schermo", "fire tv"]): return "\U0001f4fa"
     if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro", "drone"]): return "\U0001f4f7"
-    if any(w in t for w in ["cane", "gatto", "animale", "pet ", "guinzaglio", "crocchin", "antiparassit", "peli animali", "togli peli", "cuccia", "tiragraffi", "acquario"]): return "\U0001f43e"
+    if any(w in t for w in ["cane", "gatto", "animale", "pet ", "guinzaglio", "crocchin", "antiparassit", "peli animali", "togli peli", "cuccia", "tiragraffi"]): return "\U0001f43e"
     if any(w in t for w in ["scarp", "sneaker", "stival", "sandal", "mocassin", "ciabatt"]): return "\U0001f45f"
     if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito", "gonna", "shorts"]): return "\U0001f455"
     if any(w in t for w in ["borsa", "zaino", "valig", "borsone", "trolley"]): return "\U0001f45c"
@@ -311,7 +291,7 @@ def get_category_emoji(title):
     if any(w in t for w in ["chitarra", "pianola", "ukulele"]): return "\U0001f3b8"
     if any(w in t for w in ["penna", "quaderno", "cancelleria"]): return "\u270f"
     if any(w in t for w in ["condizionator", "ventilator", "stufa", "climatizza"]): return "\u2744"
-    if any(w in t for w in ["occhial", "sunglasses", "sole"]): return "\U0001f576"
+    if any(w in t for w in ["occhial", "sunglasses"]): return "\U0001f576"
     if any(w in t for w in ["power bank", "caricatore", "usb-c", "cavo"]): return "\U0001f50b"
     if any(w in t for w in ["ssd", "hard disk", "nvme", "memoria"]): return "\U0001f4be"
     return "\U0001f4e6"
@@ -327,7 +307,7 @@ def get_category_hashtag(title):
     if any(w in t for w in ["tablet", "ipad", "kindle"]): return "#tablet"
     if any(w in t for w in ["tv ", "television", "monitor", "schermo", "fire tv"]): return "#tv"
     if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro", "drone"]): return "#fotografia"
-    if any(w in t for w in ["cane", "gatto", "animale", "pet ", "guinzaglio", "crocchin", "antiparassit", "peli animali", "togli peli", "cuccia", "tiragraffi", "acquario"]): return "#animali"
+    if any(w in t for w in ["cane", "gatto", "animale", "pet ", "guinzaglio", "crocchin", "antiparassit", "peli animali", "togli peli", "cuccia", "tiragraffi"]): return "#animali"
     if any(w in t for w in ["scarp", "sneaker", "stival", "sandal", "mocassin", "ciabatt"]): return "#scarpe"
     if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito", "gonna", "shorts"]): return "#abbigliamento"
     if any(w in t for w in ["borsa", "zaino", "valig", "borsone", "trolley"]): return "#borse"
@@ -355,10 +335,6 @@ def get_category_hashtag(title):
     return "#tech"
 
 
-# ============================================================
-# TELEGRAM
-# ============================================================
-
 def send_telegram(text, image_url=None, reply_markup=None):
     base_url = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
     try:
@@ -376,7 +352,7 @@ def send_telegram(text, image_url=None, reply_markup=None):
         resp.raise_for_status()
         return True
     except Exception as e:
-        print("[TG] Errore: {}".format(e))
+        log("[TG] Errore: {}".format(e))
         return False
 
 
@@ -404,10 +380,6 @@ def fmt_saving(saving):
     return "\U0001f4b8 Risparmi: {:.2f}\u20ac\n\n".format(saving)
 
 
-# ============================================================
-# FORMATTAZIONE
-# ============================================================
-
 def format_deal(deal, deal_number=0, special=None):
     pct = deal["discount_percent"]
     asin = deal["asin"]
@@ -419,17 +391,17 @@ def format_deal(deal, deal_number=0, special=None):
 
     if special == "top":
         msg = "\U0001f3c6 <b>OFFERTA DEL GIORNO</b> \U0001f3c6\n\n"
-        footer_tag = "#offertadelgiorno"
-        footer_text = "La migliore offerta di oggi!"
+        ftag = "#offertadelgiorno"
+        ftxt = "La migliore offerta di oggi!"
     elif special == "flash":
-        msg = "\u26a1 <b>FLASH DEAL -{pct}%</b> \u26a1\n<i>Sconto oltre il 50%! Potrebbe finire presto.</i>\n\n".format(pct=pct)
-        footer_tag = "#flashdeal"
-        footer_text = "Flash deal!"
+        msg = "\u26a1 <b>FLASH DEAL -{pct}%</b> \u26a1\n<i>Oltre il 50%! Potrebbe finire presto.</i>\n\n".format(pct=pct)
+        ftag = "#flashdeal"
+        ftxt = "Flash deal!"
     else:
         alert = "\U0001f6a8" * (3 if pct >= 50 else 2 if pct >= 30 else 1)
         msg = "{} <b>SCONTO -{}%</b> {}\n\n".format(alert, pct, alert)
-        footer_tag = "#offerta"
-        footer_text = random.choice(FOOTER_PHRASES)
+        ftag = "#offerta"
+        ftxt = random.choice(FOOTER_PHRASES)
 
     msg += "{} <b>{}</b>\n\n".format(cat_emoji, title)
     msg += "\U0001f4b0 <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b>\n".format(deal["original_price"], deal["current_price"])
@@ -446,19 +418,15 @@ def format_deal(deal, deal_number=0, special=None):
     if deal_number > 0:
         msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 Offerta #{}\n".format(deal_number)
     else:
-        msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 {}\n".format(footer_text)
-    msg += "{} #amazon #sconto{} {}\n".format(footer_tag, pct, cat_tag)
+        msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 {}\n".format(ftxt)
+    msg += "{} #amazon #sconto{} {}\n".format(ftag, pct, cat_tag)
     msg += "\u26a0\ufe0f <i>Prezzo soggetto a variazioni</i>"
     return msg
 
 
-# ============================================================
-# MESSAGGI SPECIALI
-# ============================================================
-
 def send_good_morning():
     send_telegram(random.choice(GOOD_MORNING))
-    print("Buongiorno inviato!")
+    log("Buongiorno inviato!")
 
 
 def send_evening_recap(today):
@@ -476,17 +444,16 @@ def send_evening_recap(today):
     msg += "Oggi: <b>{}</b> offerte pubblicate!\n\n".format(len(deals))
     msg += "\U0001f514 Non perderti quelle di domani!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
     send_telegram(msg)
-    print("Riepilogo serale inviato!")
+    log("Riepilogo serale inviato!")
 
 
 def send_weekly_stats():
     stats = load_stats()
     if not stats:
         return
-    total = sum(len(v) for v in stats.values())
-    if total == 0:
-        return
     all_d = [d for deals in stats.values() for d in deals]
+    if not all_d:
+        return
     avg = round(sum(d["discount_percent"] for d in all_d) / len(all_d))
     best = max(all_d, key=lambda d: d["discount_percent"])
     cats = {}
@@ -496,18 +463,14 @@ def send_weekly_stats():
     top_c = ", ".join([c[0] for c in sorted(cats.items(), key=lambda x: x[1], reverse=True)[:3]])
 
     msg = "\U0001f4ca <b>La settimana in numeri</b>\n\n"
-    msg += "\U0001f525 {} offerte pubblicate\n".format(total)
+    msg += "\U0001f525 {} offerte pubblicate\n".format(len(all_d))
     msg += "\U0001f4b0 Sconto medio: {}%\n".format(avg)
     msg += "\U0001f3c6 Miglior sconto: {} (-{}%)\n".format(best["title"][:50], best["discount_percent"])
     msg += "\U0001f4e6 Top: {}\n\n".format(top_c)
     msg += "Buona settimana! \U0001f680\n\U0001f4e3 <b>@sottocosto_oggi</b>"
     send_telegram(msg)
-    print("Stats settimanali inviate!")
+    log("Stats settimanali inviate!")
 
-
-# ============================================================
-# PERSISTENZA
-# ============================================================
 
 def load_stats():
     if STATS_FILE.exists():
@@ -561,14 +524,10 @@ def mark_posted(posted, key):
         posted[today].append(key)
 
 
-def count_deals_today(posted):
+def count_deals(posted):
     today = datetime.date.today().isoformat()
     return len([k for k in posted.get(today, []) if not k.startswith("_")])
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
     now = get_italy_now()
@@ -576,19 +535,20 @@ def main():
     today = datetime.date.today().isoformat()
     weekday = now.weekday()
 
-    print("Bot v14 - {} (IT: {})".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
+    log("=== Bot v15 | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
 
     if not is_publish_time():
-        print("Fuori orario ({}-{}). Stop.".format(PUBLISH_START_HOUR, PUBLISH_END_HOUR))
+        log("Fuori orario ({}-{}). Stop.".format(PUBLISH_START_HOUR, PUBLISH_END_HOUR))
         return
 
     missing = [v for v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
         "AMAZON_CREDENTIAL_ID", "AMAZON_CREDENTIAL_SECRET", "AMAZON_PARTNER_TAG"] if not os.environ.get(v)]
     if missing:
-        print("Mancano: {}".format(missing))
+        log("Mancano: {}".format(missing))
         return
 
     posted = load_posted()
+    log("Gia oggi: {}".format(count_deals(posted)))
 
     # Buongiorno (7:00-7:59)
     if hour == 7 and not is_posted(posted, "_morning"):
@@ -596,6 +556,7 @@ def main():
         mark_posted(posted, "_morning")
         save_posted(posted)
         time.sleep(5)
+        log("OK buongiorno")
 
     # Stats settimanali (lunedi 9:00-9:59)
     if weekday == 0 and hour == 9 and not is_posted(posted, "_weekly"):
@@ -603,18 +564,21 @@ def main():
         mark_posted(posted, "_weekly")
         save_posted(posted)
         time.sleep(5)
+        log("OK stats")
 
     # Riepilogo serale (23:00-23:59)
     if hour == 23 and not is_posted(posted, "_recap"):
         send_evening_recap(today)
         mark_posted(posted, "_recap")
         save_posted(posted)
+        log("OK recap")
         return
 
-    # Cerca offerte con keyword random
+    # Cerca offerte
+    log("Cerco offerte...")
     api = create_api()
     keywords = select_keywords()
-    print("Keyword selezionate: {} | Gia oggi: {}".format(len(keywords), count_deals_today(posted)))
+    log("Keywords: {} ({})".format(len(keywords), ", ".join(keywords[:5]) + "..."))
 
     all_deals = []
     seen = set(posted.get(today, []))
@@ -631,14 +595,18 @@ def main():
             d["_kw"] = kw
             all_deals.append(d)
             n += 1
+        if n > 0:
+            log("  {} -> {}".format(kw, n))
 
-    print("Nuove: {}".format(len(all_deals)))
+    log("Nuove: {}".format(len(all_deals)))
     if not all_deals:
+        log("Nessuna nuova. Fine.")
         return
 
-    # Offerta del giorno (9:00+)
+    # Offerta del giorno (9+)
     if hour >= 9 and not is_posted(posted, "_top"):
         best = max(all_deals, key=lambda d: d["discount_percent"])
+        log("TOP: {}... (-{}%)".format(best["title"][:40], best["discount_percent"]))
         msg = format_deal(best, special="top")
         btn = make_share_button(best["asin"])
         if send_telegram(msg, best.get("image_url"), btn):
@@ -647,6 +615,7 @@ def main():
             save_posted(posted)
             save_deal_stat(best)
             all_deals.remove(best)
+            log("  TOP pubblicata!")
             time.sleep(POST_INTERVAL_SECONDS)
 
     # Flash deals (>=50%)
@@ -656,17 +625,17 @@ def main():
     for d in flash:
         if not is_publish_time() or is_posted(posted, d["asin"]):
             continue
-        dn = count_deals_today(posted) + 1
+        dn = count_deals(posted) + 1
+        log("FLASH #{}: {}... (-{}%)".format(dn, d["title"][:40], d["discount_percent"]))
         msg = format_deal(d, dn, special="flash")
         btn = make_share_button(d["asin"])
         if send_telegram(msg, d.get("image_url"), btn):
             mark_posted(posted, d["asin"])
             save_posted(posted)
             save_deal_stat(d)
-            print("  FLASH #{} {}... (-{}%)".format(dn, d["title"][:40], d["discount_percent"]))
             time.sleep(FLASH_INTERVAL_SECONDS)
 
-    # Normali: top prima poi shuffle
+    # Normali: top 5 prima poi shuffle
     normal.sort(key=lambda d: d["discount_percent"], reverse=True)
     top = normal[:5]
     rest = normal[5:]
@@ -678,17 +647,17 @@ def main():
     for d in normal:
         if not is_publish_time() or is_posted(posted, d["asin"]):
             continue
-        dn = count_deals_today(posted) + 1
+        dn = count_deals(posted) + 1
+        log("#{}: {}... (-{}%)".format(dn, d["title"][:40], d["discount_percent"]))
         msg = format_deal(d, dn)
         btn = make_share_button(d["asin"])
         if send_telegram(msg, d.get("image_url"), btn):
             mark_posted(posted, d["asin"])
             save_posted(posted)
             save_deal_stat(d)
-            print("  #{} {}... (-{}%)".format(dn, d["title"][:40], d["discount_percent"]))
             time.sleep(POST_INTERVAL_SECONDS)
 
-    print("Totale oggi: {}".format(count_deals_today(posted)))
+    log("=== Fine. Oggi: {} ===".format(count_deals(posted)))
 
 
 if __name__ == "__main__":
