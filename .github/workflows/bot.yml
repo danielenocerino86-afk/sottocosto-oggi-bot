@@ -12,23 +12,29 @@ concurrency:
 jobs:
   fetch-and-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Restore posted deals cache
-        uses: actions/cache@v4
+
+      - name: Restore cache
+        uses: actions/cache/restore@v4
         with:
-          path: posted_deals.json
-          key: posted-deals-${{ github.run_id }}
+          path: |
+            posted_deals.json
+            daily_stats.json
+          key: bot-data-${{ github.run_id }}
           restore-keys: |
-            posted-deals-
+            bot-data-
+
       - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -38,9 +44,12 @@ jobs:
           AMAZON_PARTNER_TAG: ${{ secrets.AMAZON_PARTNER_TAG }}
           MIN_DISCOUNT_PERCENT: ${{ secrets.MIN_DISCOUNT_PERCENT || '20' }}
         run: python bot.py
-      - name: Save posted deals cache
+
+      - name: Save cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: posted_deals.json
-          key: posted-deals-${{ github.run_id }}
+          path: |
+            posted_deals.json
+            daily_stats.json
+          key: bot-data-${{ github.run_id }}
