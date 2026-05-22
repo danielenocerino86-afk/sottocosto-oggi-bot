@@ -1,6 +1,7 @@
 """
-Sottocosto Oggi - Bot Telegram v15
-Fix timeout: meno keyword per ciclo, max 10 offerte, log dettagliato.
+Sottocosto Oggi - Bot Telegram v16 TECH VERTICAL
+Solo offerte tech di marchi riconosciuti. Pubblica appena trova offerte nuove.
+Monitora Offerte del Giorno e Offerte Lampo Amazon.
 """
 
 import os
@@ -9,7 +10,6 @@ import datetime
 import time
 import random
 import re
-import sys
 import requests
 from pathlib import Path
 
@@ -23,13 +23,10 @@ AMAZON_CREDENTIAL_ID = os.environ.get("AMAZON_CREDENTIAL_ID", "")
 AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
-MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "20"))
-FLASH_DEAL_PERCENT = 50
-MIN_PRICE = 5.0
-MAX_POSTS_PER_CATEGORY = 2
-MAX_POSTS_TOTAL = 10
-POST_INTERVAL_SECONDS = 300   # 5 minuti tra offerte normali
-FLASH_INTERVAL_SECONDS = 120  # 2 minuti per flash deal
+MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "15"))
+MIN_PRICE = 10.0
+MAX_POSTS_PER_CYCLE = 8
+POST_INTERVAL_SECONDS = 30
 
 PUBLISH_START_HOUR = 7
 PUBLISH_END_HOUR = 23
@@ -38,78 +35,98 @@ TIMEZONE_OFFSET = 2
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 STATS_FILE = Path(__file__).parent / "daily_stats.json"
 
-KEYWORD_GROUPS = {
-    "moda": [
-        "Abbigliamento uomo estate",
-        "Abbigliamento donna",
-        "Scarpe uomo",
-        "Scarpe donna",
-        "Borse donna pelle",
-        "Gioielli donna",
-        "Orologi uomo",
-        "Occhiali da sole",
-    ],
-    "bellezza": [
-        "Bellezza cosmetica offerta",
-        "Cura della persona",
-        "Profumi donna",
-        "Profumi uomo",
-        "Crema viso",
-        "Shampoo professionale",
-    ],
-    "tech": [
-        "Smartphone offerta",
-        "Cuffie bluetooth",
-        "Smartwatch",
-        "Tablet Android",
-        "Laptop portatile",
-        "Monitor PC",
-        "Power bank",
-        "Caricatore USB-C",
-    ],
-    "casa": [
-        "Casa cucina offerta",
-        "Robot aspirapolvere",
-        "Friggitrice ad aria",
-        "Macchina caffe",
-        "Smart home Alexa",
-        "Illuminazione LED",
-        "Ventilatore silenzioso",
-    ],
-    "tempo_libero": [
-        "Sport fitness",
-        "Videogiochi PS5",
-        "Videogiochi Nintendo Switch",
-        "Giocattoli bambini",
-        "Giardino giardinaggio",
-        "Bicicletta",
-    ],
-    "altro": [
-        "Animali domestici cane",
-        "Auto accessori",
-        "Valigia viaggio",
-        "Stampante 3D",
-        "Mobili arredamento",
-        "Materasso memory",
-        "Prodotti neonati",
-    ],
-}
+# Brand tech riconosciuti (minuscolo per confronto)
+APPROVED_BRANDS = [
+    # Smartphone / Telefonia
+    "apple", "samsung", "google", "oneplus", "motorola", "xiaomi", "oppo", "realme", "huawei", "honor", "nothing",
+    # Audio
+    "sony", "bose", "jbl", "sennheiser", "marshall", "bang & olufsen", "beats", "jabra", "anker", "soundcore",
+    "harman kardon", "denon", "audio-technica", "shure",
+    # Computer / Laptop
+    "lenovo", "hp", "dell", "asus", "acer", "msi", "microsoft surface", "razer",
+    # Tablet
+    "ipad", "galaxy tab", "fire hd", "kindle",
+    # TV / Monitor
+    "lg", "philips", "hisense", "tcl", "benq", "dell monitor", "asus monitor",
+    # Gaming
+    "playstation", "xbox", "nintendo", "steelseries", "logitech", "corsair", "hyperx", "trust",
+    # Smart Home
+    "amazon echo", "alexa", "google nest", "philips hue", "ring", "blink", "tp-link", "eufy",
+    "arlo", "meross", "tado", "netatmo", "shelly",
+    # Casa Tech / Elettrodomestici
+    "dyson", "irobot", "roomba", "ecovacs", "roborock", "dreame", "tineco",
+    "de'longhi", "delonghi", "nespresso", "krups", "kenwood", "moulinex", "braun",
+    "ninja", "instant pot", "weber", "bosch",
+    # Wearable
+    "apple watch", "galaxy watch", "garmin", "fitbit", "amazfit", "polar", "suunto",
+    # Foto / Video
+    "canon", "nikon", "gopro", "dji", "insta360", "fujifilm",
+    # Storage / Accessori
+    "sandisk", "western digital", "seagate", "crucial", "kingston",
+    "belkin", "ugreen", "spigen", "anker",
+    # Stampa / 3D
+    "creality", "bambu lab", "elegoo", "anycubic", "prusa", "brother", "epson",
+    # Networking
+    "fritz!box", "fritzbox", "netgear", "linksys", "ubiquiti",
+]
+
+# Keyword di ricerca focalizzate su tech
+SEARCH_KEYWORDS = [
+    "Apple offerta",
+    "Samsung Galaxy offerta",
+    "Sony cuffie",
+    "Bose cuffie",
+    "JBL speaker",
+    "Dyson aspirapolvere",
+    "iRobot Roomba",
+    "Ecovacs robot",
+    "PlayStation 5",
+    "Nintendo Switch",
+    "Xbox controller",
+    "Garmin smartwatch",
+    "Apple Watch",
+    "Samsung Galaxy Watch",
+    "GoPro",
+    "DJI drone",
+    "Philips Hue",
+    "Amazon Echo",
+    "Logitech gaming",
+    "Razer gaming",
+    "SanDisk SSD",
+    "Anker caricatore",
+    "De'Longhi caffe",
+    "Nespresso",
+    "Lenovo laptop",
+    "ASUS laptop",
+    "LG TV",
+    "Samsung TV",
+    "Creality stampante 3D",
+    "Canon fotocamera",
+    "Braun rasoio",
+    "Kindle Paperwhite",
+    "Fire TV Stick",
+    "Ring videocitofono",
+    "Roborock aspirapolvere",
+    "Corsair tastiera",
+    "Google Nest",
+    "TP-Link smart",
+]
 
 FOOTER_PHRASES = [
-    "Offerte ogni giorno",
-    "Sconti verificati",
-    "Risparmia ogni giorno",
-    "Solo offerte vere",
-    "Prezzi al minimo",
-    "Affari imperdibili",
+    "Solo marchi top",
+    "Tech al miglior prezzo",
+    "Offerte tech verificate",
+    "Brand che contano",
     "Scelti per te",
-    "Il risparmio e' qui",
+    "Solo il meglio della tech",
+    "Qualita' garantita",
+    "Top brand, prezzi mini",
 ]
 
 GOOD_MORNING = [
-    "\u2600\ufe0f <b>Buongiorno!</b> Le offerte di oggi stanno arrivando...\n\n\U0001f514 Pubblichiamo sconti verificati fino a mezzanotte!\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
-    "\u2615 <b>Buongiorno!</b> Pronti per nuovi sconti?\n\n\U0001f6a8 Le migliori offerte Amazon stanno per arrivare!\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
-    "\U0001f31e <b>Buongiorno!</b> Oggi tante nuove offerte in arrivo!\n\n\U0001f4b0 Sconti reali, prezzi verificati, ogni giorno.\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
+    "\u2600\ufe0f <b>Buongiorno tech lovers!</b>\n\nOggi monitoriamo le offerte dei migliori brand: Apple, Samsung, Sony, Dyson, Bose e molti altri.\n\n\U0001f514 Pubblichiamo appena troviamo uno sconto vero!\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
+    "\u2615 <b>Buongiorno!</b>\n\nLe offerte tech di oggi stanno arrivando. Solo marchi top, zero cinesate.\n\n\U0001f6a8 Stay tuned!\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
+    "\U0001f31e <b>Buongiorno!</b>\n\nNuova giornata, nuovi sconti sui migliori brand tech.\n\nSony, Apple, Samsung, Dyson... vediamo cosa ci riserva Amazon oggi!\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
 ]
 
 
@@ -126,13 +143,12 @@ def is_publish_time():
     return PUBLISH_START_HOUR <= h <= PUBLISH_END_HOUR
 
 
-def select_keywords():
-    selected = []
-    for group_name, keywords in KEYWORD_GROUPS.items():
-        n = min(len(keywords), random.randint(1, 2))
-        selected.extend(random.sample(keywords, n))
-    random.shuffle(selected)
-    return selected
+def is_approved_brand(title):
+    t = title.lower()
+    for brand in APPROVED_BRANDS:
+        if brand in t:
+            return True
+    return False
 
 
 def clean_title(title):
@@ -156,6 +172,11 @@ def is_spam_title(title):
     if any(w in title.lower() for w in ["clicca qui", "compra ora", "gratis 100%", "buy now"]):
         return True
     return False
+
+
+def select_keywords():
+    n = min(len(SEARCH_KEYWORDS), random.randint(8, 15))
+    return random.sample(SEARCH_KEYWORDS, n)
 
 
 def create_api():
@@ -201,6 +222,7 @@ def parse_item(item):
         image_url = None
         rating = None
         review_count = None
+        has_deal = False
 
         try:
             title = item.item_info.title.display_value
@@ -208,6 +230,11 @@ def parse_item(item):
             pass
         if not asin or not title or is_spam_title(title):
             return None
+
+        # Filtro brand: solo marchi approvati
+        if not is_approved_brand(title):
+            return None
+
         title = clean_title(title)
 
         try:
@@ -220,6 +247,9 @@ def parse_item(item):
                 discount_pct = price_obj.savings.percentage
                 if price_obj.savings.money:
                     saving_amount = price_obj.savings.money.amount
+            # Check se ha un deal attivo (Offerta del Giorno, Lightning, ecc.)
+            if hasattr(listing, 'deal_details') and listing.deal_details:
+                has_deal = True
         except (AttributeError, TypeError, IndexError):
             return None
 
@@ -254,84 +284,60 @@ def parse_item(item):
             "current_price": current_price, "original_price": original_price,
             "discount": saving_amount, "discount_percent": discount_pct,
             "image_url": image_url, "rating": rating, "review_count": review_count,
+            "has_deal": has_deal,
         }
     except Exception:
         return None
 
 
+def get_brand_from_title(title):
+    t = title.lower()
+    for brand in APPROVED_BRANDS:
+        if brand in t:
+            return brand.title()
+    return ""
+
+
 def get_category_emoji(title):
     t = title.lower()
-    if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg", "resina 3d", "ugello"]): return "\U0001f5a8"
-    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon", "soundbar"]): return "\U0001f3a7"
-    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]): return "\u231a"
-    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel", "custodia telefono", "cover telefono"]): return "\U0001f4f1"
-    if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]): return "\U0001f4bb"
-    if any(w in t for w in ["tablet", "ipad", "kindle"]): return "\U0001f4f2"
-    if any(w in t for w in ["tv ", "television", "monitor", "schermo", "fire tv"]): return "\U0001f4fa"
-    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro", "drone"]): return "\U0001f4f7"
-    if any(w in t for w in ["cane", "gatto", "animale", "pet ", "guinzaglio", "crocchin", "antiparassit", "peli animali", "togli peli", "cuccia", "tiragraffi"]): return "\U0001f43e"
-    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal", "mocassin", "ciabatt"]): return "\U0001f45f"
-    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito", "gonna", "shorts"]): return "\U0001f455"
-    if any(w in t for w in ["borsa", "zaino", "valig", "borsone", "trolley"]): return "\U0001f45c"
-    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]): return "\U0001f48d"
-    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]): return "\U0001f484"
-    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat", "caffettier", "friggitrice"]): return "\U0001f373"
-    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia", "scopa"]): return "\U0001f9f9"
-    if any(w in t for w in ["lampad", "luce", "led", "illumin"]): return "\U0001f4a1"
-    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller", "gaming"]): return "\U0001f3ae"
-    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis", "yoga"]): return "\U0001f3cb"
-    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "barbecue"]): return "\U0001f331"
-    if any(w in t for w in ["libro", "romanzo", "manuale"]): return "\U0001f4da"
-    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]): return "\U0001f9f8"
-    if any(w in t for w in ["auto", "moto", "dashcam", "caricatore auto"]): return "\U0001f697"
-    if any(w in t for w in ["alexa", "echo", "smart home", "domotica"]): return "\U0001f3e0"
-    if any(w in t for w in ["neonat", "biberon", "pannolin", "passeggino"]): return "\U0001f476"
-    if any(w in t for w in ["mobil", "scrivania", "armadio", "divano", "sedia"]): return "\U0001fa91"
-    if any(w in t for w in ["materass", "cuscin", "coperta", "lenzuol"]): return "\U0001f6cf"
-    if any(w in t for w in ["chitarra", "pianola", "ukulele"]): return "\U0001f3b8"
-    if any(w in t for w in ["penna", "quaderno", "cancelleria"]): return "\u270f"
-    if any(w in t for w in ["condizionator", "ventilator", "stufa", "climatizza"]): return "\u2744"
-    if any(w in t for w in ["occhial", "sunglasses"]): return "\U0001f576"
-    if any(w in t for w in ["power bank", "caricatore", "usb-c", "cavo"]): return "\U0001f50b"
-    if any(w in t for w in ["ssd", "hard disk", "nvme", "memoria"]): return "\U0001f4be"
+    if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg"]): return "\U0001f5a8"
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "soundbar", "earbuds"]): return "\U0001f3a7"
+    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes", "garmin", "fitbit"]): return "\u231a"
+    if any(w in t for w in ["iphone", "smartphone", "galaxy s", "pixel", "oneplus"]): return "\U0001f4f1"
+    if any(w in t for w in ["laptop", "notebook", "macbook", "portatil", "chromebook"]): return "\U0001f4bb"
+    if any(w in t for w in ["tablet", "ipad", "kindle", "fire hd"]): return "\U0001f4f2"
+    if any(w in t for w in ["tv ", "television", "monitor", "fire tv", "oled", "qled"]): return "\U0001f4fa"
+    if any(w in t for w in ["fotocamera", "camera", "gopro", "drone", "dji", "reflex"]): return "\U0001f4f7"
+    if any(w in t for w in ["aspira", "robot", "roomba", "roborock", "dreame", "dyson", "tineco"]): return "\U0001f9f9"
+    if any(w in t for w in ["caffe", "nespresso", "delonghi", "krups", "macchina caff"]): return "\u2615"
+    if any(w in t for w in ["playstation", "ps5", "xbox", "nintendo", "switch", "gaming", "controller"]): return "\U0001f3ae"
+    if any(w in t for w in ["alexa", "echo", "nest", "smart home", "hue", "ring", "blink"]): return "\U0001f3e0"
+    if any(w in t for w in ["rasoio", "regolabarba", "piastra", "asciugacapelli", "braun"]): return "\U0001f488"
+    if any(w in t for w in ["ssd", "hard disk", "microsd", "sandisk", "memoria"]): return "\U0001f4be"
+    if any(w in t for w in ["caricatore", "power bank", "cavo", "usb", "anker", "belkin"]): return "\U0001f50b"
+    if any(w in t for w in ["tastiera", "mouse", "webcam", "logitech", "corsair"]): return "\u2328"
+    if any(w in t for w in ["router", "wifi", "fritz", "mesh", "ripetitor"]): return "\U0001f4e1"
     return "\U0001f4e6"
 
 
 def get_category_hashtag(title):
     t = title.lower()
-    if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg", "resina 3d", "ugello"]): return "#stampa3d"
-    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "microfon", "soundbar"]): return "#audio"
-    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes"]): return "#orologi"
-    if any(w in t for w in ["telefon", "smartphone", "cellulare", "iphone", "samsung galaxy", "pixel", "custodia telefono", "cover telefono"]): return "#smartphone"
-    if any(w in t for w in ["laptop", "notebook", "computer", "portatil", "macbook"]): return "#computer"
-    if any(w in t for w in ["tablet", "ipad", "kindle"]): return "#tablet"
-    if any(w in t for w in ["tv ", "television", "monitor", "schermo", "fire tv"]): return "#tv"
-    if any(w in t for w in ["fotocamera", "camera", "obiettiv", "gopro", "drone"]): return "#fotografia"
-    if any(w in t for w in ["cane", "gatto", "animale", "pet ", "guinzaglio", "crocchin", "antiparassit", "peli animali", "togli peli", "cuccia", "tiragraffi"]): return "#animali"
-    if any(w in t for w in ["scarp", "sneaker", "stival", "sandal", "mocassin", "ciabatt"]): return "#scarpe"
-    if any(w in t for w in ["magliett", "t-shirt", "camicia", "felpa", "giacca", "pantalo", "jeans", "vestit", "abito", "gonna", "shorts"]): return "#abbigliamento"
-    if any(w in t for w in ["borsa", "zaino", "valig", "borsone", "trolley"]): return "#borse"
-    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini"]): return "#gioielli"
-    if any(w in t for w in ["profum", "crema", "trucco", "makeup", "cosmet", "siero", "shampoo"]): return "#bellezza"
-    if any(w in t for w in ["cucina", "pentol", "padell", "forno", "mixer", "frullat", "caffettier", "friggitrice"]): return "#cucina"
-    if any(w in t for w in ["aspira", "robot", "lavapaviment", "pulizia", "scopa"]): return "#casa"
-    if any(w in t for w in ["lampad", "luce", "led", "illumin"]): return "#casa"
-    if any(w in t for w in ["gioco", "videogioc", "playstation", "xbox", "nintendo", "controller", "gaming"]): return "#gaming"
-    if any(w in t for w in ["sport", "palestra", "fitness", "bici", "tapis", "yoga"]): return "#sport"
-    if any(w in t for w in ["giardino", "giardinaggio", "tosaerba", "barbecue"]): return "#giardino"
-    if any(w in t for w in ["libro", "romanzo", "manuale"]): return "#libri"
-    if any(w in t for w in ["bambin", "giocattol", "peluche", "lego"]): return "#giocattoli"
-    if any(w in t for w in ["auto", "moto", "dashcam", "caricatore auto"]): return "#auto"
-    if any(w in t for w in ["alexa", "echo", "smart home", "domotica"]): return "#smarthome"
-    if any(w in t for w in ["neonat", "biberon", "pannolin", "passeggino"]): return "#neonati"
-    if any(w in t for w in ["mobil", "scrivania", "armadio", "divano", "sedia"]): return "#arredamento"
-    if any(w in t for w in ["materass", "cuscin", "coperta", "lenzuol"]): return "#casa"
-    if any(w in t for w in ["chitarra", "pianola", "ukulele"]): return "#musica"
-    if any(w in t for w in ["penna", "quaderno", "cancelleria"]): return "#cancelleria"
-    if any(w in t for w in ["condizionator", "ventilator", "stufa", "climatizza"]): return "#clima"
-    if any(w in t for w in ["occhial", "sunglasses"]): return "#moda"
-    if any(w in t for w in ["power bank", "caricatore", "usb-c", "cavo"]): return "#accessoritech"
-    if any(w in t for w in ["ssd", "hard disk", "nvme", "memoria"]): return "#storage"
+    if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg"]): return "#stampa3d"
+    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "soundbar", "earbuds"]): return "#audio"
+    if any(w in t for w in ["smartwatch", "orologio", "watch", "garmin", "fitbit"]): return "#wearable"
+    if any(w in t for w in ["iphone", "smartphone", "galaxy s", "pixel", "oneplus"]): return "#smartphone"
+    if any(w in t for w in ["laptop", "notebook", "macbook", "portatil"]): return "#laptop"
+    if any(w in t for w in ["tablet", "ipad", "kindle", "fire hd"]): return "#tablet"
+    if any(w in t for w in ["tv ", "television", "monitor", "oled", "qled"]): return "#tv"
+    if any(w in t for w in ["fotocamera", "camera", "gopro", "drone", "dji"]): return "#foto"
+    if any(w in t for w in ["aspira", "robot", "roomba", "roborock", "dreame", "dyson"]): return "#smartHome"
+    if any(w in t for w in ["caffe", "nespresso", "delonghi"]): return "#casa"
+    if any(w in t for w in ["playstation", "ps5", "xbox", "nintendo", "gaming"]): return "#gaming"
+    if any(w in t for w in ["alexa", "echo", "nest", "hue", "ring", "blink"]): return "#smartHome"
+    if any(w in t for w in ["ssd", "hard disk", "microsd", "sandisk"]): return "#storage"
+    if any(w in t for w in ["caricatore", "power bank", "anker", "belkin"]): return "#accessori"
+    if any(w in t for w in ["tastiera", "mouse", "logitech", "corsair"]): return "#periferiche"
+    if any(w in t for w in ["router", "wifi", "fritz", "mesh"]): return "#networking"
     return "#tech"
 
 
@@ -359,8 +365,8 @@ def send_telegram(text, image_url=None, reply_markup=None):
 def make_share_button(asin):
     url = "https://t.me/share/url?url={}&text={}".format(
         requests.utils.quote("https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)),
-        requests.utils.quote("Guarda questa offerta su @sottocosto_oggi!"))
-    return {"inline_keyboard": [[{"text": "\U0001f4e4 Condividi con un amico", "url": url}]]}
+        requests.utils.quote("Guarda questa offerta tech su @sottocosto_oggi!"))
+    return {"inline_keyboard": [[{"text": "\U0001f4e4 Condividi", "url": url}]]}
 
 
 def fmt_stars(rating, review_count):
@@ -384,19 +390,21 @@ def format_deal(deal, deal_number=0, special=None):
     pct = deal["discount_percent"]
     asin = deal["asin"]
     title = deal["title"]
+    brand = get_brand_from_title(title)
     cat_emoji = get_category_emoji(title)
     cat_tag = get_category_hashtag(title)
     aff = "https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)
     clean = "https://www.amazon.it/dp/{}".format(asin)
+    brand_tag = "#{}".format(brand.lower().replace(" ", "").replace("'", "").replace("&", "")) if brand else ""
 
     if special == "top":
-        msg = "\U0001f3c6 <b>OFFERTA DEL GIORNO</b> \U0001f3c6\n\n"
+        msg = "\U0001f3c6 <b>MIGLIOR OFFERTA TECH DI OGGI</b> \U0001f3c6\n\n"
         ftag = "#offertadelgiorno"
-        ftxt = "La migliore offerta di oggi!"
-    elif special == "flash":
-        msg = "\u26a1 <b>FLASH DEAL -{pct}%</b> \u26a1\n<i>Oltre il 50%! Potrebbe finire presto.</i>\n\n".format(pct=pct)
-        ftag = "#flashdeal"
-        ftxt = "Flash deal!"
+        ftxt = "Il top di oggi!"
+    elif special == "flash" or deal.get("has_deal"):
+        msg = "\u26a1 <b>OFFERTA LAMPO -{pct}%</b> \u26a1\n<i>Offerta a tempo! Potrebbe finire presto.</i>\n\n".format(pct=pct)
+        ftag = "#offertalampo"
+        ftxt = "Corri!"
     else:
         alert = "\U0001f6a8" * (3 if pct >= 50 else 2 if pct >= 30 else 1)
         msg = "{} <b>SCONTO -{}%</b> {}\n\n".format(alert, pct, alert)
@@ -419,8 +427,8 @@ def format_deal(deal, deal_number=0, special=None):
         msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 Offerta #{}\n".format(deal_number)
     else:
         msg += "\U0001f4e3 <b>@sottocosto_oggi</b> \u2022 {}\n".format(ftxt)
-    msg += "{} #amazon #sconto{} {}\n".format(ftag, pct, cat_tag)
-    msg += "\u26a0\ufe0f <i>Prezzo soggetto a variazioni</i>"
+    msg += "{} #amazon #sconto{} {} {}".format(ftag, pct, cat_tag, brand_tag).strip()
+    msg += "\n\u26a0\ufe0f <i>Prezzo soggetto a variazioni</i>"
     return msg
 
 
@@ -435,16 +443,16 @@ def send_evening_recap(today):
     if not deals:
         return
     top3 = sorted(deals, key=lambda d: d["discount_percent"], reverse=True)[:3]
-    msg = "\U0001f319 <b>TOP 3 offerte di oggi</b>\n\n"
+    msg = "\U0001f319 <b>TOP 3 offerte tech di oggi</b>\n\n"
     for i, d in enumerate(top3):
         e = get_category_emoji(d["title"])
         link = "https://www.amazon.it/dp/{}?tag={}".format(d["asin"], AMAZON_PARTNER_TAG)
         msg += "{}. {} <a href=\"{}\">{}</a>\n   <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b> (-{}%)\n\n".format(
             i+1, e, link, d["title"][:60], d["original_price"], d["current_price"], d["discount_percent"])
-    msg += "Oggi: <b>{}</b> offerte pubblicate!\n\n".format(len(deals))
-    msg += "\U0001f514 Non perderti quelle di domani!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
+    msg += "Oggi: <b>{}</b> offerte tech pubblicate!\n\n".format(len(deals))
+    msg += "\U0001f514 Domani nuovi sconti dai migliori brand!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
     send_telegram(msg)
-    log("Riepilogo serale inviato!")
+    log("Recap serale!")
 
 
 def send_weekly_stats():
@@ -456,20 +464,13 @@ def send_weekly_stats():
         return
     avg = round(sum(d["discount_percent"] for d in all_d) / len(all_d))
     best = max(all_d, key=lambda d: d["discount_percent"])
-    cats = {}
-    for d in all_d:
-        c = get_category_hashtag(d["title"])
-        cats[c] = cats.get(c, 0) + 1
-    top_c = ", ".join([c[0] for c in sorted(cats.items(), key=lambda x: x[1], reverse=True)[:3]])
-
-    msg = "\U0001f4ca <b>La settimana in numeri</b>\n\n"
-    msg += "\U0001f525 {} offerte pubblicate\n".format(len(all_d))
+    msg = "\U0001f4ca <b>Settimana tech in numeri</b>\n\n"
+    msg += "\U0001f525 {} offerte brand verificate\n".format(len(all_d))
     msg += "\U0001f4b0 Sconto medio: {}%\n".format(avg)
-    msg += "\U0001f3c6 Miglior sconto: {} (-{}%)\n".format(best["title"][:50], best["discount_percent"])
-    msg += "\U0001f4e6 Top: {}\n\n".format(top_c)
+    msg += "\U0001f3c6 Best deal: {} (-{}%)\n\n".format(best["title"][:50], best["discount_percent"])
     msg += "Buona settimana! \U0001f680\n\U0001f4e3 <b>@sottocosto_oggi</b>"
     send_telegram(msg)
-    log("Stats settimanali inviate!")
+    log("Stats settimanali!")
 
 
 def load_stats():
@@ -535,10 +536,10 @@ def main():
     today = datetime.date.today().isoformat()
     weekday = now.weekday()
 
-    log("=== Bot v15 | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
+    log("=== Bot v16 TECH | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
 
     if not is_publish_time():
-        log("Fuori orario ({}-{}). Stop.".format(PUBLISH_START_HOUR, PUBLISH_END_HOUR))
+        log("Fuori orario. Stop.")
         return
 
     missing = [v for v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
@@ -548,7 +549,7 @@ def main():
         return
 
     posted = load_posted()
-    log("Gia oggi: {}".format(count_deals(posted)))
+    log("Oggi: {} offerte".format(count_deals(posted)))
 
     # Buongiorno (7:00-7:59)
     if hour == 7 and not is_posted(posted, "_morning"):
@@ -556,7 +557,6 @@ def main():
         mark_posted(posted, "_morning")
         save_posted(posted)
         time.sleep(5)
-        log("OK buongiorno")
 
     # Stats settimanali (lunedi 9:00-9:59)
     if weekday == 0 and hour == 9 and not is_posted(posted, "_weekly"):
@@ -564,48 +564,44 @@ def main():
         mark_posted(posted, "_weekly")
         save_posted(posted)
         time.sleep(5)
-        log("OK stats")
 
-    # Riepilogo serale (23:00-23:59)
+    # Recap serale (23:00-23:59)
     if hour == 23 and not is_posted(posted, "_recap"):
         send_evening_recap(today)
         mark_posted(posted, "_recap")
         save_posted(posted)
-        log("OK recap")
         return
 
-    # Cerca offerte
-    log("Cerco offerte...")
+    # Cerca offerte tech
     api = create_api()
     keywords = select_keywords()
-    log("Keywords: {} ({})".format(len(keywords), ", ".join(keywords[:5]) + "..."))
+    log("Cerco in {} keyword...".format(len(keywords)))
 
     all_deals = []
     seen = set(posted.get(today, []))
 
     for kw in keywords:
         deals = search_deals(api, kw)
-        n = 0
         for d in deals:
-            if n >= MAX_POSTS_PER_CATEGORY:
-                break
             if d["asin"] in seen:
                 continue
+            if len(all_deals) >= MAX_POSTS_PER_CYCLE * 3:
+                break
             seen.add(d["asin"])
             d["_kw"] = kw
             all_deals.append(d)
-            n += 1
-        if n > 0:
-            log("  {} -> {}".format(kw, n))
 
-    log("Nuove: {}".format(len(all_deals)))
+    log("Trovate: {} offerte brand".format(len(all_deals)))
     if not all_deals:
         log("Nessuna nuova. Fine.")
         return
 
+    # Ordina: deal attivi prima, poi per sconto
+    all_deals.sort(key=lambda d: (d.get("has_deal", False), d["discount_percent"]), reverse=True)
+
     # Offerta del giorno (9+)
     if hour >= 9 and not is_posted(posted, "_top"):
-        best = max(all_deals, key=lambda d: d["discount_percent"])
+        best = all_deals[0]
         log("TOP: {}... (-{}%)".format(best["title"][:40], best["discount_percent"]))
         msg = format_deal(best, special="top")
         btn = make_share_button(best["asin"])
@@ -614,50 +610,32 @@ def main():
             mark_posted(posted, "_top")
             save_posted(posted)
             save_deal_stat(best)
-            all_deals.remove(best)
-            log("  TOP pubblicata!")
+            all_deals = all_deals[1:]
             time.sleep(POST_INTERVAL_SECONDS)
 
-    # Flash deals (>=50%)
-    flash = [d for d in all_deals if d["discount_percent"] >= FLASH_DEAL_PERCENT]
-    normal = [d for d in all_deals if d["discount_percent"] < FLASH_DEAL_PERCENT]
-
-    for d in flash:
+    # Pubblica le restanti (max per ciclo)
+    published = 0
+    for d in all_deals:
+        if published >= MAX_POSTS_PER_CYCLE:
+            break
         if not is_publish_time() or is_posted(posted, d["asin"]):
             continue
+
         dn = count_deals(posted) + 1
-        log("FLASH #{}: {}... (-{}%)".format(dn, d["title"][:40], d["discount_percent"]))
-        msg = format_deal(d, dn, special="flash")
+        special = "flash" if d.get("has_deal") else None
+        log("#{}: {}... (-{}%){}".format(dn, d["title"][:40], d["discount_percent"],
+            " [DEAL]" if d.get("has_deal") else ""))
+
+        msg = format_deal(d, dn, special=special)
         btn = make_share_button(d["asin"])
         if send_telegram(msg, d.get("image_url"), btn):
             mark_posted(posted, d["asin"])
             save_posted(posted)
             save_deal_stat(d)
-            time.sleep(FLASH_INTERVAL_SECONDS)
-
-    # Normali: top 5 prima poi shuffle
-    normal.sort(key=lambda d: d["discount_percent"], reverse=True)
-    top = normal[:5]
-    rest = normal[5:]
-    random.shuffle(rest)
-    normal = top + rest
-    if len(normal) > MAX_POSTS_TOTAL:
-        normal = normal[:MAX_POSTS_TOTAL]
-
-    for d in normal:
-        if not is_publish_time() or is_posted(posted, d["asin"]):
-            continue
-        dn = count_deals(posted) + 1
-        log("#{}: {}... (-{}%)".format(dn, d["title"][:40], d["discount_percent"]))
-        msg = format_deal(d, dn)
-        btn = make_share_button(d["asin"])
-        if send_telegram(msg, d.get("image_url"), btn):
-            mark_posted(posted, d["asin"])
-            save_posted(posted)
-            save_deal_stat(d)
+            published += 1
             time.sleep(POST_INTERVAL_SECONDS)
 
-    log("=== Fine. Oggi: {} ===".format(count_deals(posted)))
+    log("=== Fine. Oggi: {} offerte ===".format(count_deals(posted)))
 
 
 if __name__ == "__main__":
