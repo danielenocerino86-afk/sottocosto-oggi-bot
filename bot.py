@@ -1,7 +1,6 @@
 """
-Sottocosto Oggi - Bot Telegram v17
-Tech verticale senza vincolo brand. Filtro qualita: rating >= 3.5, recensioni >= 50.
-Keyword tech + stampa 3D. Pubblica appena trova.
+Sottocosto Oggi - Bot Telegram v18 FINAL
+Tech verticale. Filtro qualita. Promo Prime e Music. 07:00-00:00 Italia.
 """
 
 import os
@@ -32,8 +31,7 @@ FLASH_DEAL_PERCENT = 50
 MAX_POSTS_PER_CYCLE = 8
 POST_INTERVAL_SECONDS = 30
 
-PUBLISH_START_HOUR = 0
-PUBLISH_END_HOUR = 23
+PUBLISH_START_HOUR = 7
 TIMEZONE_OFFSET = 2
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
@@ -41,141 +39,73 @@ STATS_FILE = Path(__file__).parent / "daily_stats.json"
 
 KEYWORD_GROUPS = {
     "smartphone": [
-        "Smartphone offerta",
-        "Smartphone 5G",
-        "Cellulare offerta",
-        "Cover smartphone",
-        "Pellicola vetro temperato",
+        "Smartphone offerta", "Smartphone 5G", "Cellulare offerta",
+        "Cover smartphone", "Pellicola vetro temperato",
     ],
     "audio": [
-        "Cuffie bluetooth",
-        "Cuffie wireless",
-        "Auricolari bluetooth",
-        "Speaker bluetooth",
-        "Soundbar TV",
-        "Microfono USB",
+        "Cuffie bluetooth", "Cuffie wireless", "Auricolari bluetooth",
+        "Speaker bluetooth", "Soundbar TV", "Microfono USB",
     ],
     "computer": [
-        "Laptop portatile offerta",
-        "Notebook offerta",
-        "Monitor PC",
-        "Monitor gaming",
-        "Tastiera meccanica",
-        "Mouse gaming",
-        "Webcam HD",
-        "SSD NVMe",
-        "Hard disk esterno",
-        "RAM DDR4",
-        "Scheda video",
+        "Laptop portatile offerta", "Notebook offerta", "Monitor PC",
+        "Monitor gaming", "Tastiera meccanica", "Mouse gaming",
+        "Webcam HD", "SSD NVMe", "Hard disk esterno", "RAM DDR4",
     ],
     "smart_home": [
-        "Smart home Alexa",
-        "Echo Dot",
-        "Lampadine smart",
-        "Presa smart WiFi",
-        "Videocamera sicurezza",
-        "Videocitofono smart",
-        "Termostato smart",
-        "Robot aspirapolvere",
-        "Aspirapolvere senza fili",
+        "Smart home Alexa", "Echo Dot", "Lampadine smart",
+        "Presa smart WiFi", "Videocamera sicurezza", "Videocitofono smart",
+        "Robot aspirapolvere", "Aspirapolvere senza fili",
     ],
     "wearable": [
-        "Smartwatch offerta",
-        "Smartwatch uomo",
-        "Smartwatch donna",
-        "Fitness tracker",
-        "Orologio sportivo GPS",
+        "Smartwatch offerta", "Smartwatch uomo", "Smartwatch donna",
+        "Fitness tracker", "Orologio sportivo GPS",
     ],
     "gaming": [
-        "Videogiochi PS5",
-        "Videogiochi Nintendo Switch",
-        "Controller gaming",
-        "Cuffie gaming",
-        "Tastiera gaming",
-        "Mouse gaming",
+        "Videogiochi PS5", "Videogiochi Nintendo Switch",
+        "Controller gaming", "Cuffie gaming", "Tastiera gaming",
         "Sedia gaming",
     ],
     "foto_video": [
-        "Action camera",
-        "Fotocamera digitale",
-        "Drone con camera",
-        "Treppiede fotocamera",
-        "Scheda SD 128GB",
+        "Action camera", "Fotocamera digitale", "Drone con camera",
+        "Treppiede fotocamera", "Scheda SD 128GB",
     ],
     "casa_tech": [
-        "Friggitrice ad aria",
-        "Macchina caffe espresso",
-        "Robot cucina",
-        "Aspirapolvere robot",
-        "Ventilatore silenzioso",
-        "Climatizzatore portatile",
-        "Purificatore aria",
-        "Bilancia smart",
+        "Friggitrice ad aria", "Macchina caffe espresso", "Robot cucina",
+        "Ventilatore silenzioso", "Purificatore aria",
     ],
-    "accessori_tech": [
-        "Power bank 20000",
-        "Caricatore USB-C rapido",
-        "Caricatore wireless",
-        "Hub USB-C",
-        "Cavo USB-C",
-        "Supporto PC portatile",
-        "Ciabatta multipresa USB",
-        "Proiettore portatile",
+    "accessori": [
+        "Power bank 20000", "Caricatore USB-C rapido", "Caricatore wireless",
+        "Hub USB-C", "Supporto PC portatile", "Proiettore portatile",
     ],
-    "tablet_ereader": [
-        "Tablet offerta",
-        "Tablet Android",
-        "eReader",
-        "Kindle",
-        "Custodia tablet",
+    "tablet": [
+        "Tablet offerta", "Tablet Android", "Kindle", "eReader",
     ],
     "networking": [
-        "Router WiFi 6",
-        "Ripetitore WiFi",
-        "Mesh WiFi",
-        "Switch ethernet",
+        "Router WiFi 6", "Ripetitore WiFi", "Mesh WiFi",
     ],
     "stampa_3d": [
-        "Stampante 3D",
-        "Stampante 3D resina",
-        "Filamento PLA",
-        "Filamento PETG",
-        "Filamento TPU",
-        "Resina stampante 3D",
-        "Ugello stampante 3D",
-        "Piatto stampa 3D",
+        "Stampante 3D", "Stampante 3D resina", "Filamento PLA",
+        "Filamento PETG", "Resina stampante 3D",
     ],
-    "tv_display": [
-        "Smart TV offerta",
-        "TV 4K",
-        "Fire TV Stick",
-        "Chromecast",
-        "Proiettore 4K",
+    "tv": [
+        "Smart TV offerta", "TV 4K", "Fire TV Stick", "Proiettore 4K",
     ],
-    "cura_persona_tech": [
-        "Rasoio elettrico",
-        "Regolabarba",
-        "Spazzolino elettrico",
+    "cura_persona": [
+        "Rasoio elettrico", "Regolabarba", "Spazzolino elettrico",
         "Asciugacapelli ionico",
-        "Piastra capelli",
     ],
 }
 
 BLACKLIST_WORDS = [
     "generico", "no brand", "senza marca", "unbranded",
     "lotto di", "set 100 pezzi", "bulk",
-    "cover silicone economica", "custodia generica",
 ]
 
 FOOTER_PHRASES = [
-    "Solo tech di qualita'",
-    "Offerte tech verificate",
-    "Tech al miglior prezzo",
-    "Scelti per te",
-    "Prezzi al minimo",
-    "Affari tech imperdibili",
-    "Il meglio della tech",
-    "Qualita' garantita",
+    "Solo tech di qualita'", "Offerte tech verificate",
+    "Tech al miglior prezzo", "Scelti per te",
+    "Prezzi al minimo", "Affari tech imperdibili",
+    "Il meglio della tech", "Qualita' garantita",
 ]
 
 GOOD_MORNING = [
@@ -194,8 +124,7 @@ def get_italy_now():
 
 
 def is_publish_time():
-    h = get_italy_now().hour
-    return PUBLISH_START_HOUR <= h <= PUBLISH_END_HOUR
+    return get_italy_now().hour >= PUBLISH_START_HOUR
 
 
 def select_keywords():
@@ -371,12 +300,12 @@ def get_category_emoji(title):
     if any(w in t for w in ["alexa", "echo", "nest", "smart home", "hue", "ring", "blink"]): return "\U0001f3e0"
     if any(w in t for w in ["rasoio", "regolabarba", "spazzolino", "asciugacapelli", "piastra capelli"]): return "\U0001f488"
     if any(w in t for w in ["ssd", "hard disk", "microsd", "nvme", "memoria ram"]): return "\U0001f4be"
-    if any(w in t for w in ["caricatore", "power bank", "cavo usb", "hub usb", "ciabatta"]): return "\U0001f50b"
+    if any(w in t for w in ["caricatore", "power bank", "cavo usb", "hub usb"]): return "\U0001f50b"
     if any(w in t for w in ["tastiera", "mouse", "webcam", "tappetino"]): return "\u2328"
-    if any(w in t for w in ["router", "wifi", "mesh", "ripetitore", "switch ethernet"]): return "\U0001f4e1"
+    if any(w in t for w in ["router", "wifi", "mesh", "ripetitore"]): return "\U0001f4e1"
     if any(w in t for w in ["proiettore", "proiett"]): return "\U0001f4fd"
-    if any(w in t for w in ["ventilator", "climatizzator", "purificator", "deumidificat"]): return "\u2744"
-    if any(w in t for w in ["sedia gaming", "scrivania", "supporto monitor"]): return "\U0001fa91"
+    if any(w in t for w in ["ventilator", "climatizzator", "purificator"]): return "\u2744"
+    if any(w in t for w in ["sedia gaming", "scrivania"]): return "\U0001fa91"
     return "\U0001f4e6"
 
 
@@ -396,14 +325,18 @@ def get_category_hashtag(title):
     if any(w in t for w in ["alexa", "echo", "nest", "hue", "ring", "blink", "smart home"]): return "#smarthome"
     if any(w in t for w in ["rasoio", "regolabarba", "spazzolino", "asciugacapelli"]): return "#curapersona"
     if any(w in t for w in ["ssd", "hard disk", "microsd", "nvme", "ram"]): return "#storage"
-    if any(w in t for w in ["caricatore", "power bank", "cavo", "hub usb", "ciabatta"]): return "#accessori"
+    if any(w in t for w in ["caricatore", "power bank", "cavo", "hub usb"]): return "#accessori"
     if any(w in t for w in ["tastiera", "mouse", "webcam"]): return "#periferiche"
     if any(w in t for w in ["router", "wifi", "mesh", "ripetitore"]): return "#networking"
-    if any(w in t for w in ["proiettore", "proiett"]): return "#video"
+    if any(w in t for w in ["proiettore"]): return "#video"
     if any(w in t for w in ["ventilator", "climatizzator", "purificator"]): return "#clima"
     if any(w in t for w in ["sedia gaming", "scrivania"]): return "#setup"
     return "#tech"
 
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 def send_telegram(text, image_url=None, reply_markup=None):
     base_url = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
@@ -494,9 +427,31 @@ def format_deal(deal, deal_number=0, special=None):
     return msg
 
 
+# ============================================================
+# MESSAGGI SPECIALI
+# ============================================================
+
 def send_good_morning():
     send_telegram(random.choice(GOOD_MORNING))
     log("Buongiorno!")
+
+
+def send_prime_promo(tag):
+    msgs = [
+        "\U0001f4e6 <b>Amazon Prime \u2014 Prova gratuita 30 giorni</b>\n\nSpedizioni illimitate in 1 giorno, Prime Video con film e serie TV, Prime Music, foto illimitate e accesso anticipato alle Offerte Lampo.\n\nGratis per 30 giorni. Cancelli quando vuoi, senza impegno.\n\n\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={tag}\">Attiva la prova gratuita</a>\n\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(tag=tag),
+        "\U0001f69a <b>Consegne gratuite in 1 giorno con Amazon Prime</b>\n\nPrime Video, Prime Music, foto illimitate e 30 minuti di anticipo sulle Offerte Lampo. Tutto incluso.\n\nProva 30 giorni, gratis. Nessun vincolo.\n\n\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={tag}\">Prova Prime gratis</a>\n\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(tag=tag),
+    ]
+    send_telegram(random.choice(msgs))
+    log("Promo Prime!")
+
+
+def send_music_promo(tag):
+    msgs = [
+        "\U0001f3b5 <b>Amazon Music Unlimited \u2014 30 giorni gratis</b>\n\n90 milioni di brani in alta qualita', senza pubblicita'. Scarica offline, ascolta ovunque.\n\nGratis per 30 giorni. Poi 9,99\u20ac/mese, cancelli quando vuoi.\n\n\U0001f449 <a href=\"https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited?tag={tag}\">Prova Music Unlimited</a>\n\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(tag=tag),
+        "\U0001f3a7 <b>90 milioni di brani, zero pubblicita'</b>\n\nAmazon Music Unlimited: musica illimitata in HD, download offline, compatibile con Alexa.\n\n30 giorni di prova gratuita. Poi 9,99\u20ac/mese, cancelli quando vuoi.\n\n\U0001f449 <a href=\"https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited?tag={tag}\">Prova gratis</a>\n\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(tag=tag),
+    ]
+    send_telegram(random.choice(msgs))
+    log("Promo Music!")
 
 
 def send_evening_recap(today):
@@ -534,6 +489,10 @@ def send_weekly_stats():
     send_telegram(msg)
     log("Stats!")
 
+
+# ============================================================
+# PERSISTENZA
+# ============================================================
 
 def load_stats():
     if STATS_FILE.exists():
@@ -592,16 +551,20 @@ def count_deals(posted):
     return len([k for k in posted.get(today, []) if not k.startswith("_")])
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
     now = get_italy_now()
     hour = now.hour
     today = datetime.date.today().isoformat()
     weekday = now.weekday()
 
-    log("=== Bot v17 TECH | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
+    log("=== Bot v18 FINAL | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
 
     if not is_publish_time():
-        log("Fuori orario. Stop.")
+        log("Fuori orario (prima delle {}). Stop.".format(PUBLISH_START_HOUR))
         return
 
     missing = [v for v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
@@ -613,28 +576,42 @@ def main():
     posted = load_posted()
     log("Oggi: {}".format(count_deals(posted)))
 
-    # Buongiorno
+    # Buongiorno (7:00-7:59)
     if hour == 7 and not is_posted(posted, "_morning"):
         send_good_morning()
         mark_posted(posted, "_morning")
         save_posted(posted)
         time.sleep(5)
 
-    # Stats settimanali
+    # Stats settimanali (lunedi 9:00-9:59)
     if weekday == 0 and hour == 9 and not is_posted(posted, "_weekly"):
         send_weekly_stats()
         mark_posted(posted, "_weekly")
         save_posted(posted)
         time.sleep(5)
 
-    # Recap serale
+    # Promo Prime (12:00-12:59)
+    if hour == 12 and not is_posted(posted, "_prime"):
+        send_prime_promo(AMAZON_PARTNER_TAG)
+        mark_posted(posted, "_prime")
+        save_posted(posted)
+        time.sleep(5)
+
+    # Promo Music (20:00-20:59)
+    if hour == 20 and not is_posted(posted, "_music"):
+        send_music_promo(AMAZON_PARTNER_TAG)
+        mark_posted(posted, "_music")
+        save_posted(posted)
+        time.sleep(5)
+
+    # Recap serale (23:00-23:59)
     if hour == 23 and not is_posted(posted, "_recap"):
         send_evening_recap(today)
         mark_posted(posted, "_recap")
         save_posted(posted)
         return
 
-    # Cerca
+    # Cerca offerte
     api = create_api()
     keywords = select_keywords()
     log("Keywords: {}".format(len(keywords)))
@@ -659,7 +636,7 @@ def main():
     # Ordina: deal attivi prima, poi sconto
     all_deals.sort(key=lambda d: (d.get("has_deal", False), d["discount_percent"]), reverse=True)
 
-    # Top del giorno
+    # Top del giorno (9+)
     if hour >= 9 and not is_posted(posted, "_top"):
         best = all_deals[0]
         log("TOP: {}... (-{}%)".format(best["title"][:40], best["discount_percent"]))
