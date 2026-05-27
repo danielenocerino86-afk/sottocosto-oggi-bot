@@ -1,8 +1,6 @@
 """
-Sottocosto Oggi - Bot Telegram v21 OPTIMIZED
-Strategia basata su ricerca: focus categorie ad alta commissione,
-keyword generiche per massimo recall, filtri qualita per scartare robaccia.
-Sempre attivo, mai inattivo. 07:00-00:00 Italia.
+Sottocosto Oggi - Bot Telegram v22 NEVER IDLE
+Ottimizzazione anti-inattivita: cron 10min, 4 offerte/ciclo, pool ampio.
 """
 
 import os
@@ -24,13 +22,14 @@ AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
 # CONFIG
-MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "15"))
+MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "10"))
 FLASH_DEAL_PERCENT = 50
 MIN_PRICE = 12.0
 MIN_RATING = 3.5
 MIN_REVIEWS = 50
 NO_RATING_MIN_PRICE = 25.0
-MAX_POSTS_PER_CYCLE = 3
+MAX_POSTS_PER_CYCLE = 4
+MAX_DEALS_POOL = 50
 POST_INTERVAL_SECONDS = 120
 
 PUBLISH_START_HOUR = 7
@@ -39,10 +38,6 @@ TIMEZONE_OFFSET = 2
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 STATS_FILE = Path(__file__).parent / "daily_stats.json"
 
-# KEYWORD GROUPS - basate su ricerca 2026:
-# Priorita categorie ad alta commissione (Luxury Beauty 10%, Apparel/Kitchen 5%,
-# Home/Pets/Sports 3%, Games 20%) ma con keyword generiche per massimo recall.
-# Il filtro qualita (rating, recensioni, blacklist) scarta la robaccia.
 KEYWORD_GROUPS = {
     "smartphone": [
         "Smartphone offerta", "Smartphone 5G offerta",
@@ -71,7 +66,7 @@ KEYWORD_GROUPS = {
         "Smartwatch offerta", "Fitness tracker",
         "Orologio sportivo GPS", "Bilancia smart",
     ],
-    "gaming": [  # 20% commissione
+    "gaming": [
         "Giochi PS5 offerta", "Giochi Nintendo Switch",
         "Controller wireless gaming", "Cuffie gaming offerta",
         "Sedia gaming", "Tappetino mouse gaming",
@@ -81,26 +76,26 @@ KEYWORD_GROUPS = {
         "Fotocamera digitale", "Treppiede fotografico",
         "Ring light professionale", "Scheda SD veloce",
     ],
-    "moda_uomo": [  # 5% commissione
+    "moda_uomo": [
         "Scarpe uomo offerta", "Sneaker uomo",
         "Giacca uomo offerta", "Jeans uomo",
         "Felpa uomo cotone", "T-shirt uomo cotone",
         "Cintura pelle uomo", "Orologio uomo classico",
     ],
-    "moda_donna": [  # 5% commissione
+    "moda_donna": [
         "Scarpe donna offerta", "Sneaker donna",
         "Borsa donna pelle", "Giacca donna",
         "Vestito donna offerta", "Stivali donna",
         "Orecchini argento", "Bracciale donna",
     ],
-    "bellezza": [  # fino a 10% Luxury Beauty
+    "bellezza": [
         "Profumo donna offerta", "Profumo uomo offerta",
         "Siero viso vitamina C", "Crema viso antirughe",
         "Piastra capelli professionale", "Asciugacapelli ionico",
         "Palette ombretti", "Set pennelli trucco",
         "Crema corpo idratante", "Maschera viso",
     ],
-    "casa_cucina": [  # 5% commissione
+    "casa_cucina": [
         "Macchina caffe espresso", "Friggitrice ad aria offerta",
         "Robot cucina multifunzione", "Set pentole offerta",
         "Set coltelli professionali", "Frullatore potente",
@@ -119,7 +114,7 @@ KEYWORD_GROUPS = {
         "Set attrezzi completo", "Avvitatore a impulsi",
         "Cassetta attrezzi", "Livella laser",
     ],
-    "sport": [  # 3% commissione
+    "sport": [
         "Scarpe running offerta", "Tappetino yoga",
         "Manubri palestra", "Elastici fitness",
         "Bicicletta offerta", "Tapis roulant",
@@ -155,7 +150,7 @@ KEYWORD_GROUPS = {
         "Fire TV Stick", "Proiettore 4K",
         "Staffa TV parete",
     ],
-    "animali": [  # 3% commissione
+    "animali": [
         "Cibo cane premium", "Cibo gatto premium",
         "Cuccia cane", "Tiragraffi gatto",
         "Guinzaglio retrattile", "Lettiera autopulente",
@@ -165,7 +160,7 @@ KEYWORD_GROUPS = {
         "Aspirapolvere auto portatile", "Tappetini auto universali",
         "Compressore portatile auto",
     ],
-    "salute": [  # 3% commissione
+    "salute": [
         "Rasoio elettrico offerta", "Regolabarba professionale",
         "Spazzolino elettrico", "Misuratore pressione",
         "Termometro digitale", "Massaggiatore cervicale",
@@ -177,7 +172,6 @@ KEYWORD_GROUPS = {
     ],
 }
 
-# Brand cinesi/scadenti da escludere automaticamente
 BRAND_BLACKLIST = [
     "dmoao", "timu", "yestel", "teclast", "oscal", "oukitel",
     "blackview", "umidigi", "cubot", "doogee", "ulefone", "hotwav",
@@ -206,10 +200,6 @@ GOOD_MORNING = [
 ]
 
 
-# ============================================================
-# UTILITY
-# ============================================================
-
 def log(msg):
     print(msg, flush=True)
 
@@ -223,20 +213,18 @@ def is_publish_time():
 
 
 def select_keywords():
-    """Seleziona keyword random da ogni gruppo per massima varieta."""
     selected = []
     groups = list(KEYWORD_GROUPS.keys())
     random.shuffle(groups)
     for g in groups:
         kws = KEYWORD_GROUPS[g]
-        n = min(len(kws), random.randint(1, 2))
+        n = min(len(kws), random.randint(2, 3))
         selected.extend(random.sample(kws, n))
     random.shuffle(selected)
     return selected
 
 
 def clean_title(title):
-    """Pulisce il titolo da rumore."""
     title = re.sub(r'\s+', ' ', title).strip()
     title = re.sub(r'[,/|]\s*(?:compatibile con|adatto per|per)\s+[\w\s/,]+$', '', title, flags=re.IGNORECASE)
     title = re.sub(r'\s*\([^)]*compatib[^)]*\)', '', title, flags=re.IGNORECASE)
@@ -250,7 +238,6 @@ def clean_title(title):
 
 
 def is_spam(title):
-    """Filtro anti-spam su titolo."""
     if len(title) > 400:
         return True
     if sum(1 for c in title if 0x4E00 < ord(c) < 0x9FFF) > 3:
@@ -267,16 +254,10 @@ def create_api():
     return AmazonCreatorsApi(
         credential_id=AMAZON_CREDENTIAL_ID,
         credential_secret=AMAZON_CREDENTIAL_SECRET,
-        version="3.2",
-        tag=AMAZON_PARTNER_TAG,
-        country=Country.IT,
-        throttling=1.0,
+        version="3.2", tag=AMAZON_PARTNER_TAG,
+        country=Country.IT, throttling=1.0,
     )
 
-
-# ============================================================
-# RICERCA E PARSING
-# ============================================================
 
 def search_deals(api, keyword, max_results=10):
     try:
@@ -345,7 +326,6 @@ def parse_item(item):
         except (AttributeError, TypeError):
             pass
 
-        # Filtro qualita
         if rating:
             try:
                 if float(rating) < MIN_RATING:
@@ -372,12 +352,7 @@ def parse_item(item):
         return None
 
 
-# ============================================================
-# CATEGORIE, EMOJI, HASHTAG
-# ============================================================
-
 def get_deal_category(title):
-    """Categoria per diversificazione e hashtag."""
     t = title.lower()
     if any(w in t for w in ["stampant", "3d", "filament", "pla", "petg"]): return "stampa3d"
     if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "soundbar", "earbuds"]): return "audio"
@@ -415,7 +390,6 @@ def get_deal_category(title):
 
 
 def diversify_deals(deals):
-    """Riordina per evitare categorie consecutive uguali."""
     if len(deals) <= 1:
         return deals
     result = []
@@ -473,10 +447,6 @@ def get_category_hashtag(title):
     return tags.get(cat, "#offerta")
 
 
-# ============================================================
-# TELEGRAM
-# ============================================================
-
 def send_telegram(text, image_url=None, reply_markup=None):
     base = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
     try:
@@ -504,10 +474,6 @@ def make_share_button(asin):
         requests.utils.quote("Offerta su @sottocosto_oggi!"))
     return {"inline_keyboard": [[{"text": "\U0001f4e4 Condividi con un amico", "url": u}]]}
 
-
-# ============================================================
-# FORMATTAZIONE MESSAGGIO
-# ============================================================
 
 def fmt_stars(rating, rc):
     try:
@@ -572,10 +538,6 @@ def format_deal(deal, dn=0, special=None):
     return msg
 
 
-# ============================================================
-# MESSAGGI SPECIALI
-# ============================================================
-
 def send_good_morning():
     send_telegram(random.choice(GOOD_MORNING))
     log("Buongiorno!")
@@ -635,10 +597,6 @@ def send_weekly_stats():
     log("Stats!")
 
 
-# ============================================================
-# PERSISTENZA
-# ============================================================
-
 def load_stats():
     try:
         return json.loads(STATS_FILE.read_text()) if STATS_FILE.exists() else {}
@@ -691,17 +649,13 @@ def count_deals(p):
     return len([k for k in p.get(datetime.date.today().isoformat(), []) if not k.startswith("_")])
 
 
-# ============================================================
-# MAIN
-# ============================================================
-
 def main():
     now = get_italy_now()
     hour = now.hour
     today = datetime.date.today().isoformat()
     wd = now.weekday()
 
-    log("=== Bot v21 | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
+    log("=== v22 NEVER IDLE | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
 
     if not is_publish_time():
         log("Notte. Stop.")
@@ -717,7 +671,6 @@ def main():
     posted = load_posted()
     log("Oggi: {}".format(count_deals(posted)))
 
-    # MESSAGGI SPECIALI ORARI
     if hour == 7 and not is_posted(posted, "_am"):
         send_good_morning()
         mark_posted(posted, "_am")
@@ -748,7 +701,6 @@ def main():
         save_posted(posted)
         return
 
-    # CERCA OFFERTE
     api = create_api()
     kws = select_keywords()
     log("Kw: {}".format(len(kws)))
@@ -757,22 +709,22 @@ def main():
     seen = set(posted.get(today, []))
 
     for kw in kws:
+        if len(all_deals) >= MAX_DEALS_POOL:
+            break
         for d in search_deals(api, kw):
-            if d["asin"] not in seen and len(all_deals) < MAX_POSTS_PER_CYCLE * 6:
+            if d["asin"] not in seen and len(all_deals) < MAX_DEALS_POOL:
                 seen.add(d["asin"])
                 d["_kw"] = kw
                 all_deals.append(d)
 
-    log("Nuove: {}".format(len(all_deals)))
+    log("Pool: {}".format(len(all_deals)))
     if not all_deals:
         log("Zero. Fine.")
         return
 
-    # Ordina e diversifica
     all_deals.sort(key=lambda d: (d.get("has_deal", False), d["discount_percent"]), reverse=True)
     all_deals = diversify_deals(all_deals)
 
-    # OFFERTA DEL GIORNO (>= 9)
     if hour >= 9 and not is_posted(posted, "_top"):
         best = max(all_deals, key=lambda d: d["discount_percent"])
         log("TOP: {}... (-{}%)".format(best["title"][:35], best["discount_percent"]))
@@ -784,7 +736,6 @@ def main():
             all_deals.remove(best)
             time.sleep(POST_INTERVAL_SECONDS)
 
-    # PUBBLICA (max 3 per ciclo, categorie diverse)
     pub = 0
     for d in all_deals:
         if pub >= MAX_POSTS_PER_CYCLE or not is_publish_time() or is_posted(posted, d["asin"]):
