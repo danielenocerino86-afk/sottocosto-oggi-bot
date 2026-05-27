@@ -491,7 +491,16 @@ def fmt_saving(s):
     if s >= 50:
         return "\U0001f4b8 Risparmi: <b>{:.2f}\u20ac</b> \U0001f525\n\n".format(s)
     return "\U0001f4b8 Risparmi: {:.2f}\u20ac\n\n".format(s)
-
+def extract_short_name(title):
+    """Estrae nome prodotto sintetico (primi 40 char, taglio pulito)."""
+    # Prendi prima parte fino a virgola, trattino o numero del modello lungo
+    short = re.split(r'[,\-\|]', title)[0].strip()
+    # Se troppo corto, prendi i primi 50 char
+    if len(short) < 15:
+        short = title[:50].rsplit(' ', 1)[0]
+    elif len(short) > 50:
+        short = short[:50].rsplit(' ', 1)[0]
+    return short.strip()
 
 def format_deal(deal, dn=0, special=None):
     pct = deal["discount_percent"]
@@ -516,7 +525,11 @@ def format_deal(deal, dn=0, special=None):
         ft = "#offerta"
         fx = random.choice(FOOTER_PHRASES)
 
-    msg += "{} <b>{}</b>\n\n".format(e, title)
+    # Headline sintetica: estrai prodotto + prezzi
+    short_title = extract_short_name(title)
+    msg += "<b>{} a {:.0f}\u20ac invece di {:.0f}\u20ac</b>\n\n".format(
+        short_title, deal["current_price"], deal["original_price"])
+    msg += "{} {}\n\n".format(e, title)
     msg += "\U0001f4b0 <s>{:.2f}\u20ac</s> \u27a1 <b>{:.2f}\u20ac</b>\n".format(
         deal["original_price"], deal["current_price"])
     msg += fmt_saving(deal["discount"])
