@@ -91,41 +91,60 @@ def fmt_price(value):
 
 
 def get_product_data(api, asin, partner_tag):
-    # La libreria amazon_creatorsapi puo' avere nomi parametri diversi a seconda della versione
-    # Provo tutte le varianti possibili
+    """Estrae i dati prodotto. Prova multiple firme dell'API.
+    Stampa nei log GitHub Actions quale variante ha funzionato."""
     results = None
-    last_err = None
-    for param_name in ['item_ids', 'asin', 'item_id', 'asins']:
-        for value_format in ([asin], asin):
-            # Salta combinazioni illogiche
-            if param_name in ('item_ids', 'asins') and not isinstance(value_format, list):
-                continue
-            if param_name in ('asin', 'item_id') and isinstance(value_format, list):
-                continue
-            try:
-                results = api.get_items(**{param_name: value_format})
-                if results:
-                    break
-            except TypeError as e:
-                last_err = str(e)
-                continue
-            except Exception as e:
-                last_err = str(e)
-                continue
-        if results:
-            break
+    errors = []
 
-    # Se non funziona con get_items, provo search_items con l'ASIN come keyword
+    # Tentativo 1-4: get_items con vari nomi parametro
+    for param_name in ['item_ids', 'asins', 'asin', 'item_id']:
+        try:
+            if param_name in ('item_ids', 'asins'):
+                results = api.get_items(**{param_name: [asin]})
+            else:
+                results = api.get_items(**{param_name: asin})
+            if results and hasattr(results, 'items') and results.items:
+                print("[DEBUG] get_items({}) OK".format(param_name), flush=True)
+                break
+            else:
+                results = None
+                errors.append("{}: empty".format(param_name))
+        except TypeError as e:
+            errors.append("{}: {}".format(param_name, str(e)[:60]))
+            results = None
+        except Exception as e:
+            errors.append("{}: {}".format(param_name, str(e)[:60]))
+            results = None
+
+    # Tentativo 5: get_items metodo positional
     if not results:
         try:
-            results = api.search_items(keywords=asin, item_count=1)
+            results = api.get_items([asin])
+            if results and hasattr(results, 'items') and results.items:
+                print("[DEBUG] get_items(positional list) OK", flush=True)
+            else:
+                results = None
+                errors.append("positional: empty")
         except Exception as e:
-            return None, "Errore API: {}".format(str(e)[:100])
+            errors.append("positional: {}".format(str(e)[:60]))
+            results = None
 
-    if not results or not results.items or len(results.items) == 0:
-        if last_err:
-            return None, "Prodotto non trovato. ({})".format(last_err[:80])
-        return None, "Prodotto non trovato"
+    # Tentativo 6: get_items con argomento singolo
+    if not results:
+        try:
+            results = api.get_items(asin)
+            if results and hasattr(results, 'items') and results.items:
+                print("[DEBUG] get_items(positional str) OK", flush=True)
+            else:
+                results = None
+                errors.append("positional_str: empty")
+        except Exception as e:
+            errors.append("positional_str: {}".format(str(e)[:60]))
+            results = None
+
+    if not results or not hasattr(results, 'items') or not results.items:
+        err_msg = "Prodotto non trovato. Tentativi: {}".format(" | ".join(errors[:3]))
+        return None, err_msg[:200]
 
     item = results.items[0]
     data = {'asin': asin}
@@ -652,6 +671,9 @@ def handle_creator_command(api, url, partner_tag):
                                    "• https://www.amazon.it/dp/CODICE\n"
                                    "• https://amzn.to/CODICE\n"
                                    "• https://amzn.eu/d/CODICE")
+
+    # Log dell'ASIN estratto per debug
+    print("[CREATOR] ASIN estratto: {}".format(asin), flush=True)
 
     data, err = get_product_data(api, asin, partner_tag)
     if err:
