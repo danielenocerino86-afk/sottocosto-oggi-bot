@@ -91,112 +91,29 @@ def fmt_price(value):
 
 
 def get_product_data(api, asin, partner_tag):
-    """Recupera dati prodotto. Ispeziona la libreria a runtime per trovare
-    il metodo corretto di get_items."""
+    """Recupera dati prodotto.
 
+    La libreria amazon_creatorsapi (parte di python-amazon-paapi 6.x) ha la firma:
+        items = api.get_items([asin1, asin2, ...])
+    Ritorna direttamente una LISTA di item (NON un oggetto con .items).
+    """
     item = None
 
-    # STRATEGIA 1: Ispeziona la libreria per trovare il vero nome del metodo
-    methods = [m for m in dir(api) if 'item' in m.lower() and not m.startswith('_')]
-    print("[CREATOR] Metodi API disponibili con 'item': {}".format(methods), flush=True)
-
-    # STRATEGIA 2: Prova tutti i metodi candidati con varie firme
-    candidates = ['get_items', 'getitems', 'get_item', 'getitem',
-                  'lookup_items', 'lookup', 'fetch_items', 'items']
-
-    for method_name in candidates:
-        if not hasattr(api, method_name):
-            continue
-        method = getattr(api, method_name)
-        if not callable(method):
-            continue
-
-        # Ispeziona la firma del metodo per capire i parametri
-        try:
-            import inspect
-            sig = inspect.signature(method)
-            params = list(sig.parameters.keys())
-            print("[CREATOR] {} firma: {}".format(method_name, params), flush=True)
-        except Exception:
-            params = []
-
-        # Prova vari nomi parametri basandoti sulla firma
-        for try_param in params + ['item_ids', 'asins', 'asin', 'item_id', 'ids']:
-            if try_param in ('self',) or not try_param:
-                continue
-            for val_format in [[asin], asin]:
-                # Lista solo per parametri al plurale
-                if try_param.endswith('s') and not isinstance(val_format, list):
-                    continue
-                if not try_param.endswith('s') and isinstance(val_format, list):
-                    continue
-                try:
-                    result = method(**{try_param: val_format})
-                    if result and hasattr(result, 'items') and result.items:
-                        item = result.items[0]
-                        print("[CREATOR] OK: {}({}={})".format(method_name, try_param, type(val_format).__name__), flush=True)
-                        break
-                except TypeError:
-                    continue
-                except Exception as e:
-                    print("[CREATOR] {} err: {}".format(method_name, str(e)[:60]), flush=True)
-                    continue
-            if item:
-                break
-        if item:
-            break
-
-        # Prova positional
-        if not item:
-            for val_format in [[asin], asin]:
-                try:
-                    result = method(val_format)
-                    if result and hasattr(result, 'items') and result.items:
-                        item = result.items[0]
-                        print("[CREATOR] OK: {}(positional {})".format(method_name, type(val_format).__name__), flush=True)
-                        break
-                except Exception:
-                    continue
-        if item:
-            break
-
-    # STRATEGIA 3: Fallback - search_items con titolo prodotto (scaricato da Amazon)
-    if not item:
-        print("[CREATOR] Tutti i metodi falliti, provo scraping titolo da Amazon", flush=True)
-        try:
-            # Scarica la pagina Amazon per estrarre il titolo
-            page_url = "https://www.amazon.it/dp/{}".format(asin)
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                       'Accept-Language': 'it-IT,it;q=0.9'}
-            resp = requests.get(page_url, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                # Estrai titolo dalla pagina con regex
-                m = re.search(r'<title>(?:Amazon\.it:?\s*)?(.+?)</title>', resp.text)
-                if m:
-                    page_title = m.group(1).strip()
-                    # Pulisci dal suffisso "Amazon.it"
-                    page_title = re.sub(r'\s*[-:]\s*Amazon\.it.*$', '', page_title, flags=re.IGNORECASE)
-                    if len(page_title) > 10:
-                        print("[CREATOR] Titolo da Amazon: {}".format(page_title[:60]), flush=True)
-                        # Cerca con le prime parole come keyword
-                        keywords = ' '.join(page_title.split()[:4])
-                        try:
-                            results = api.search_items(keywords=keywords, item_count=10)
-                            if results and results.items:
-                                for it in results.items:
-                                    if it.asin == asin:
-                                        item = it
-                                        print("[CREATOR] Match esatto trovato via search!", flush=True)
-                                        break
-                        except Exception as e:
-                            print("[CREATOR] search_items fallita: {}".format(e), flush=True)
-        except Exception as e:
-            print("[CREATOR] Scraping fallito: {}".format(e), flush=True)
+    try:
+        # Chiamata corretta: lista positional, ritorna lista direttamente
+        items = api.get_items([asin])
+        if items and len(items) > 0:
+            item = items[0]
+            # Verifica che sia un item valido (non un None per ASIN non trovato)
+            if item is None or (hasattr(item, 'asin') and item.asin is None):
+                item = None
+                return None, "Prodotto non disponibile su Amazon (ASIN: {})".format(asin)
+    except Exception as e:
+        return None, "Errore API get_items: {}".format(str(e)[:120])
 
     if not item:
-        return None, "Prodotto non recuperabile dall'API Amazon (ASIN: {})".format(asin)
+        return None, "Prodotto non trovato (ASIN: {})".format(asin)
 
-    # Estrai i dati dal prodotto
     actual_asin = item.asin if hasattr(item, 'asin') else asin
     data = {'asin': actual_asin}
 
@@ -214,6 +131,7 @@ def get_product_data(api, asin, partner_tag):
         title = title[:80] + '...'
     data['title_short'] = title
 
+    # Estrai prezzi da offers_v2.listings
     try:
         listing = item.offers_v2.listings[0]
         p = listing.price
@@ -231,7 +149,20 @@ def get_product_data(api, asin, partner_tag):
                     ((data['original_price'] - data['current_price']) / data['original_price']) * 100
                 )
     except (AttributeError, TypeError, IndexError):
-        return None, "Prezzi non disponibili"
+        # Fallback: prova .offers.listings (vecchia firma)
+        try:
+            listing = item.offers.listings[0]
+            data['current_price'] = listing.price.amount
+            data['original_price'] = data['current_price']
+            data['discount_percent'] = 0
+            if hasattr(listing, 'saving_basis') and listing.saving_basis:
+                data['original_price'] = listing.saving_basis.amount
+                if data['original_price'] > data['current_price']:
+                    data['discount_percent'] = round(
+                        ((data['original_price'] - data['current_price']) / data['original_price']) * 100
+                    )
+        except (AttributeError, TypeError, IndexError):
+            return None, "Prezzi non disponibili"
 
     try:
         data['image_url'] = item.images.primary.large.url
