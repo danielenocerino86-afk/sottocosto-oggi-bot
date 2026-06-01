@@ -1,8 +1,6 @@
 """
-Sottocosto Oggi - Bot Telegram v24 FINAL
-PRIORITA' 1: Deal attivi Amazon (Offerte del giorno, Lampo, Prime).
-PRIORITA' 2: Categorie con keyword di qualita'.
-4 promo affiliate Amazon ruotate nella giornata (Prime, Prime Video, Music, Audible).
+Sottocosto Oggi - Bot Telegram v25 FINAL
+Anti-inattivita' rafforzato: ricerca a 3 fasi, filtri permissivi, pool 150.
 """
 
 import os
@@ -23,16 +21,16 @@ AMAZON_CREDENTIAL_ID = os.environ.get("AMAZON_CREDENTIAL_ID", "")
 AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
-# CONFIG
+# CONFIG OTTIMIZZATA - filtri piu' permissivi per evitare inattivita'
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "10"))
 FLASH_DEAL_PERCENT = 50
-MIN_PRICE = 12.0
+MIN_PRICE = 10.0
 MIN_RATING = 3.5
-MIN_REVIEWS = 50
-NO_RATING_MIN_PRICE = 30.0
-MAX_POSTS_PER_CYCLE = 4
-MAX_DEALS_POOL = 100
-POST_INTERVAL_SECONDS = 120
+MIN_REVIEWS = 30
+NO_RATING_MIN_PRICE = 25.0
+MAX_POSTS_PER_CYCLE = 5
+MAX_DEALS_POOL = 150
+POST_INTERVAL_SECONDS = 90
 
 PUBLISH_START_HOUR = 7
 TIMEZONE_OFFSET = 2
@@ -40,8 +38,7 @@ TIMEZONE_OFFSET = 2
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 STATS_FILE = Path(__file__).parent / "daily_stats.json"
 
-# FASE 1: Keyword per trovare DEAL ATTIVI (Lightning, Deal of the Day, ecc.)
-# Vengono cercate per prime e filtrate per has_deal=True
+# FASE 1: Deal attivi Amazon
 DEAL_KEYWORDS = [
     "offerta del giorno", "offerta lampo amazon",
     "deal today amazon", "offerte oggi",
@@ -49,141 +46,188 @@ DEAL_KEYWORDS = [
     "offerta a tempo amazon", "miglior offerta oggi",
 ]
 
-# FASE 2: Keyword categorie per completare il pool
+# FASE 1.5: Keyword fresh per ore serali
+EVENING_KEYWORDS = [
+    "novita Amazon", "appena uscito",
+    "best seller offerta", "piu venduti",
+    "consigliato Amazon", "Top rated",
+    "scopri Amazon", "amazon choice",
+    "prezzo minimo", "miglior prezzo Amazon",
+]
+
+# FASE 2: Keyword categorie
 KEYWORD_GROUPS = {
     "smartphone": [
         "iPhone offerta", "Samsung Galaxy offerta", "Xiaomi smartphone",
         "Custodia iPhone", "Cover Samsung Galaxy",
         "Vetro temperato iPhone", "Caricatore rapido USB-C",
+        "Supporto telefono auto",
     ],
     "audio": [
         "Sony cuffie wireless", "Bose cuffie", "JBL speaker bluetooth",
         "Sennheiser cuffie", "Marshall speaker", "AirPods offerta",
         "Galaxy Buds", "Beats Studio", "Jabra auricolari",
+        "Cuffie noise cancelling premium",
     ],
     "computer": [
         "Lenovo laptop offerta", "HP laptop offerta", "ASUS laptop",
         "Dell monitor", "Samsung monitor", "LG monitor",
         "Logitech mouse wireless", "Corsair tastiera meccanica",
-        "Samsung SSD", "Crucial SSD NVMe",
+        "Samsung SSD", "Crucial SSD NVMe", "Kingston memoria",
+        "Logitech MX", "Razer Basilisk",
     ],
     "smart_home": [
         "Echo Dot Alexa", "Google Nest Hub", "Philips Hue",
         "Ring videocitofono", "TP-Link Tapo",
         "iRobot Roomba", "Roborock aspirapolvere", "Dyson aspirapolvere",
         "Dreame robot", "Ecovacs Deebot",
+        "Bosch elettrodomestico", "Rowenta aspirapolvere",
     ],
     "wearable": [
         "Apple Watch offerta", "Samsung Galaxy Watch", "Garmin smartwatch",
         "Fitbit offerta", "Amazfit GTR",
+        "Withings smart scale", "Polar fitness",
     ],
     "gaming": [
         "PlayStation 5 gioco", "Nintendo Switch gioco",
         "Xbox controller wireless", "SteelSeries cuffie",
         "Razer mouse gaming", "Logitech G PRO",
-        "Corsair RGB", "Elgato streaming",
+        "Corsair RGB", "HyperX Cloud", "Elgato streaming",
     ],
     "foto_video": [
         "GoPro Hero offerta", "DJI Mini drone", "Canon EOS",
-        "Sony Alpha", "Insta360", "Manfrotto treppiede",
+        "Sony Alpha", "Fujifilm Instax",
+        "Insta360", "Manfrotto treppiede", "Godox luce",
     ],
     "moda_uomo": [
         "Levi's uomo jeans", "Tommy Hilfiger uomo", "Calvin Klein uomo",
-        "Lacoste polo uomo", "The North Face giacca",
-        "Nike scarpe uomo", "Adidas scarpe uomo", "Puma sneaker uomo",
+        "Lacoste polo uomo", "Ralph Lauren uomo",
+        "The North Face giacca", "Nike scarpe uomo",
+        "Adidas scarpe uomo", "Puma sneaker uomo",
         "New Balance uomo", "Timberland scarpe",
-        "Ray-Ban occhiali sole", "Hugo Boss profumo", "Diesel uomo",
+        "Ray-Ban occhiali sole", "Hugo Boss profumo",
+        "Diesel uomo", "Geox scarpe uomo",
     ],
     "moda_donna": [
-        "Levi's donna jeans", "Tommy Hilfiger donna", "Calvin Klein donna",
+        "Levi's donna jeans", "Tommy Hilfiger donna",
+        "Calvin Klein donna", "Lacoste polo donna",
         "Nike scarpe donna", "Adidas scarpe donna",
+        "Puma donna", "New Balance donna",
         "Michael Kors borsa", "Guess borsa donna",
-        "Furla borsa", "Pandora gioielli", "Swarovski",
-        "Pinko donna", "Liu Jo donna", "Birkenstock sandali",
+        "Furla borsa", "Coccinelle borsa",
+        "Pandora gioielli", "Swarovski",
+        "Pinko donna", "Liu Jo donna",
+        "Geox scarpe donna", "Birkenstock sandali",
     ],
     "bellezza": [
         "L'Oreal Paris offerta", "Maybelline offerta", "NYX Professional",
-        "Clinique offerta", "Estee Lauder", "Lancome crema",
-        "La Roche Posay", "Vichy crema", "Bioderma",
-        "Kerastase shampoo", "GHD piastra", "Dyson Airwrap",
+        "Clinique offerta", "Estee Lauder offerta",
+        "Lancome crema", "La Roche Posay",
+        "Vichy crema", "Bioderma",
+        "Kerastase shampoo", "L'Oreal Professionnel",
+        "GHD piastra", "Dyson Airwrap",
+        "Remington asciugacapelli", "Babyliss piastra",
         "Oral-B spazzolino elettrico", "Philips Sonicare",
-        "Chanel profumo", "Dior profumo", "YSL profumo",
+        "Braun Silk Expert", "Braun epilatore",
+        "Chanel profumo", "Dior profumo",
+        "Yves Saint Laurent profumo", "Versace profumo",
     ],
     "casa_cucina": [
         "De'Longhi macchina caffe", "Nespresso offerta",
+        "Krups macchina caffe", "Lavazza A Modo Mio",
         "KitchenAid offerta", "Kenwood robot cucina",
+        "Moulinex Cookeo",
         "Ninja friggitrice aria", "Philips friggitrice",
-        "Tefal padella", "Le Creuset pentola", "WMF pentole",
-        "Bosch elettrodomestico", "Smeg piccoli elettrodomestici",
+        "Tefal padella", "Le Creuset pentola",
+        "WMF pentole", "Lagostina pentole",
+        "Bosch elettrodomestico", "Russell Hobbs",
+        "Severin tostapane", "Smeg piccoli elettrodomestici",
     ],
     "casa_arredo": [
         "Philips Hue illuminazione", "IKEA accessori",
         "Brabantia pattumiera", "Joseph Joseph cucina",
-        "Yankee Candle", "Bosch trapano", "Kärcher idropulitrice",
-        "Tempur cuscino", "Emma materasso", "Eve materasso",
+        "Vileda aspirapolvere", "Bissell aspirapolvere",
+        "Yankee Candle", "Bosch trapano",
+        "Black & Decker trapano", "Kärcher idropulitrice",
+        "Bosch tagliaerba",
+        "Set asciugamani 100% cotone", "Tempur cuscino",
+        "Emma materasso", "Eve materasso",
         "Lenzuola raso cotone", "Piumino oca",
     ],
     "fai_da_te": [
         "Bosch trapano avvitatore", "Black Decker avvitatore",
-        "Makita trapano", "DeWalt avvitatore", "Stanley cassetta attrezzi",
+        "Makita trapano", "DeWalt avvitatore",
+        "Kärcher idropulitrice", "Bosch sega",
+        "Stanley cassetta attrezzi", "Bosch livella laser",
     ],
     "sport": [
         "Nike scarpe running", "Adidas scarpe running",
         "ASICS running", "New Balance running",
-        "Under Armour offerta", "Garmin GPS ciclismo",
-        "Theragun massaggiatore", "Columbia outdoor",
+        "Brooks running", "Under Armour offerta",
+        "Salomon trail running", "Garmin GPS ciclismo",
+        "Polar fitness", "Theragun massaggiatore",
+        "Speedo costume", "Columbia outdoor",
+        "Salewa giacca", "Decathlon offerta",
     ],
     "bambini": [
         "LEGO offerta", "Playmobil offerta",
-        "Barbie offerta", "Ravensburger puzzle",
-        "Clementoni gioco", "Fisher-Price",
-        "Chicco passeggino", "Cybex seggiolino",
+        "Barbie offerta", "Hot Wheels",
+        "Ravensburger puzzle", "Clementoni gioco",
+        "Fisher-Price", "Chicco passeggino",
+        "Cybex seggiolino", "Maxi Cosi seggiolino",
+        "Inglesina passeggino",
     ],
     "accessori_tech": [
         "Anker power bank", "Anker caricatore USB-C",
         "Belkin caricatore wireless", "Samsung caricatore rapido",
         "Apple caricatore originale", "Ugreen hub USB-C",
+        "Spigen custodia", "OtterBox custodia",
     ],
     "tablet_ereader": [
         "iPad offerta", "Samsung Galaxy Tab",
-        "Kindle Paperwhite", "Kindle Scribe", "Apple Pencil",
+        "Kindle Paperwhite", "Kindle Scribe",
+        "Lenovo Tab", "Apple Pencil",
     ],
     "networking": [
         "Fritz!Box router", "TP-Link WiFi 6",
         "Netgear Nighthawk", "Eero mesh Amazon",
+        "ASUS router gaming",
     ],
     "stampa_3d": [
         "Creality Ender", "Bambu Lab", "Elegoo Mars",
-        "Anycubic Photon", "Filamento PLA premium", "Filamento PETG",
+        "Anycubic Photon", "Prusa Mini",
+        "Filamento PLA premium", "Filamento PETG",
     ],
     "tv": [
         "LG OLED offerta", "Samsung Neo QLED",
-        "Sony Bravia", "Hisense ULED", "Philips Ambilight",
-        "Fire TV Stick 4K Max", "Apple TV 4K",
+        "Sony Bravia", "Hisense ULED",
+        "Philips Ambilight", "Fire TV Stick 4K Max",
+        "Apple TV 4K", "Chromecast Google TV",
     ],
     "animali": [
         "Royal Canin cane", "Royal Canin gatto",
-        "Hill's Science cane", "Trixie accessori",
-        "Furbo camera cane",
+        "Hill's Science cane", "Hill's gatto",
+        "Catit gatto", "Trixie accessori",
+        "Furbo camera cane", "PetSafe accessori",
     ],
     "auto": [
         "Nextbase dashcam", "Garmin dashcam",
         "Michelin pneumatici", "Bosch tergicristalli",
-        "Kärcher pulizia auto",
+        "Kärcher pulizia auto", "Philips lampadine auto",
     ],
     "salute": [
         "Braun termometro", "Omron misuratore pressione",
         "Oral-B Pro", "Philips Sonicare Pro",
-        "Braun Series 9 rasoio",
+        "Braun Series 9 rasoio", "Philips OneBlade",
     ],
     "valigie": [
         "Samsonite valigia", "American Tourister",
         "Eastpak zaino", "Roncato valigia",
+        "Delsey valigia", "The North Face zaino",
         "Osprey zaino trekking",
     ],
 }
 
-# Blacklist brand cinesi/scadenti
 BRAND_BLACKLIST = [
     "dmoao", "timu", "yestel", "teclast", "oscal", "oukitel",
     "blackview", "umidigi", "cubot", "doogee", "ulefone", "hotwav",
@@ -226,10 +270,6 @@ GOOD_MORNING = [
     "\U0001f31e <b>Buongiorno!</b>\n\nOggi nuove offerte su Amazon ti aspettano.\n\nElettronica, moda, casa, bellezza e tanto altro. Solo prodotti consigliati.\n\n\U0001f4f2 <b>@sottocosto_oggi</b>",
 ]
 
-
-# ============================================================
-# UTILITY
-# ============================================================
 
 def log(msg):
     print(msg, flush=True)
@@ -482,10 +522,6 @@ def get_category_hashtag(title):
     return tags.get(cat, "#offerta")
 
 
-# ============================================================
-# TELEGRAM
-# ============================================================
-
 def send_telegram(text, image_url=None, reply_markup=None):
     base = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
     try:
@@ -513,10 +549,6 @@ def make_share_button(asin):
         requests.utils.quote("Offerta su @sottocosto_oggi!"))
     return {"inline_keyboard": [[{"text": "\U0001f4e4 Condividi con un amico", "url": u}]]}
 
-
-# ============================================================
-# FORMATTAZIONE
-# ============================================================
 
 def fmt_stars(rating, rc):
     try:
@@ -580,10 +612,6 @@ def format_deal(deal, dn=0, special=None):
     msg += "\u26a0\ufe0f <i>Prezzo soggetto a variazioni</i>"
     return msg
 
-
-# ============================================================
-# MESSAGGI SPECIALI
-# ============================================================
 
 def send_good_morning():
     send_telegram(random.choice(GOOD_MORNING))
@@ -661,10 +689,6 @@ def send_weekly_stats():
     log("Stats!")
 
 
-# ============================================================
-# PERSISTENZA
-# ============================================================
-
 def load_stats():
     try:
         return json.loads(STATS_FILE.read_text()) if STATS_FILE.exists() else {}
@@ -687,11 +711,12 @@ def save_deal_stat(deal):
 
 
 def load_posted():
+    """Mantiene gli ultimi 2 giorni per anti-duplicati."""
     try:
         data = json.loads(POSTED_FILE.read_text()) if POSTED_FILE.exists() else {}
         if isinstance(data, dict):
-            today = datetime.date.today().isoformat()
-            return {k: v for k, v in data.items() if k == today}
+            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+            return {k: v for k, v in data.items() if k >= yesterday}
         return {}
     except Exception:
         return {}
@@ -702,7 +727,11 @@ def save_posted(p):
 
 
 def is_posted(p, k):
-    return k in p.get(datetime.date.today().isoformat(), [])
+    """Cerca k in tutti i giorni memorizzati."""
+    for day_keys in p.values():
+        if k in day_keys:
+            return True
+    return False
 
 
 def mark_posted(p, k):
@@ -714,12 +743,15 @@ def mark_posted(p, k):
 
 
 def count_deals(p):
-    return len([k for k in p.get(datetime.date.today().isoformat(), []) if not k.startswith("_")])
+    today = datetime.date.today().isoformat()
+    return len([k for k in p.get(today, []) if not k.startswith("_")])
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def is_special_posted(p, k):
+    """Check special marker solo per oggi."""
+    today = datetime.date.today().isoformat()
+    return k in p.get(today, [])
+
 
 def main():
     now = get_italy_now()
@@ -727,7 +759,7 @@ def main():
     today = datetime.date.today().isoformat()
     wd = now.weekday()
 
-    log("=== v24 FINAL | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
+    log("=== v25 | {} | IT: {} ===".format(datetime.datetime.now().isoformat(), now.strftime("%H:%M")))
 
     if not is_publish_time():
         log("Notte. Stop.")
@@ -743,62 +775,62 @@ def main():
     posted = load_posted()
     log("Oggi: {}".format(count_deals(posted)))
 
-    # PALINSESTO MESSAGGI SPECIALI:
-    # 07:00 Buongiorno | 11:00 Prime | 14:00 Prime Video | 17:00 Audible
-    # 20:00 Music | 23:00 Recap | Lun 09:00 Stats
-    if hour == 7 and not is_posted(posted, "_am"):
+    # PALINSESTO SPECIALI
+    if hour == 7 and not is_special_posted(posted, "_am"):
         send_good_morning()
         mark_posted(posted, "_am")
         save_posted(posted)
         time.sleep(5)
 
-    if wd == 0 and hour == 9 and not is_posted(posted, "_wk"):
+    if wd == 0 and hour == 9 and not is_special_posted(posted, "_wk"):
         send_weekly_stats()
         mark_posted(posted, "_wk")
         save_posted(posted)
         time.sleep(5)
 
-    if hour == 11 and not is_posted(posted, "_pr"):
+    if hour == 11 and not is_special_posted(posted, "_pr"):
         send_prime_promo(AMAZON_PARTNER_TAG)
         mark_posted(posted, "_pr")
         save_posted(posted)
         time.sleep(5)
 
-    if hour == 14 and not is_posted(posted, "_pv"):
+    if hour == 14 and not is_special_posted(posted, "_pv"):
         send_prime_video_promo(AMAZON_PARTNER_TAG)
         mark_posted(posted, "_pv")
         save_posted(posted)
         time.sleep(5)
 
-    if hour == 17 and not is_posted(posted, "_ab"):
+    if hour == 17 and not is_special_posted(posted, "_ab"):
         send_audible_promo(AMAZON_PARTNER_TAG)
         mark_posted(posted, "_ab")
         save_posted(posted)
         time.sleep(5)
 
-    if hour == 20 and not is_posted(posted, "_mu"):
+    if hour == 20 and not is_special_posted(posted, "_mu"):
         send_music_promo(AMAZON_PARTNER_TAG)
         mark_posted(posted, "_mu")
         save_posted(posted)
         time.sleep(5)
 
-    if hour == 23 and not is_posted(posted, "_rc"):
+    if hour == 23 and not is_special_posted(posted, "_rc"):
         send_evening_recap(today)
         mark_posted(posted, "_rc")
         save_posted(posted)
         return
 
     # ============================================================
-    # RICERCA OFFERTE A 2 FASI:
-    # FASE 1 (PRIORITA'): Deal attivi Amazon (Lightning, Deal of the Day)
-    # FASE 2: Keyword categorie con brand di qualita'
+    # RICERCA OFFERTE A 3 FASI (anti-inattivita')
     # ============================================================
-
     api = create_api()
     all_deals = []
-    seen = set(posted.get(today, []))
+    seen = set()
+    # Accumula ASIN gia' pubblicati in tutti i giorni memorizzati
+    for day_keys in posted.values():
+        for k in day_keys:
+            if not k.startswith("_"):
+                seen.add(k)
 
-    # FASE 1: Cerca deal attivi
+    # FASE 1: Deal attivi (priorita' massima)
     log("=== FASE 1: Deal Amazon attivi ===")
     for kw in DEAL_KEYWORDS:
         if len(all_deals) >= MAX_DEALS_POOL:
@@ -806,7 +838,6 @@ def main():
         deals_found = search_deals(api, kw)
         new_count = 0
         for d in deals_found:
-            # In fase 1 prendiamo SOLO i deal attivi (has_deal=True)
             if d["asin"] not in seen and d.get("has_deal") and len(all_deals) < MAX_DEALS_POOL:
                 seen.add(d["asin"])
                 d["_kw"] = kw
@@ -816,12 +847,29 @@ def main():
         if new_count > 0:
             log("  [DEAL] {} -> {}".format(kw, new_count))
 
-    log("Deal attivi trovati: {}".format(len(all_deals)))
+    log("Deal attivi: {}".format(len(all_deals)))
 
-    # FASE 2: Completa il pool con keyword categorie
+    # FASE 1.5: Keyword serali (anti-inattivita')
+    if hour >= 19 and len(all_deals) < MAX_POSTS_PER_CYCLE * 3:
+        log("=== FASE 1.5: Keyword serali ===")
+        for kw in EVENING_KEYWORDS:
+            if len(all_deals) >= MAX_DEALS_POOL:
+                break
+            deals_found = search_deals(api, kw)
+            new_count = 0
+            for d in deals_found:
+                if d["asin"] not in seen and len(all_deals) < MAX_DEALS_POOL:
+                    seen.add(d["asin"])
+                    d["_kw"] = kw
+                    all_deals.append(d)
+                    new_count += 1
+            if new_count > 0:
+                log("  EVENING {} -> {}".format(kw, new_count))
+
+    # FASE 2: Keyword categorie
     if len(all_deals) < MAX_DEALS_POOL:
         kws = select_keywords()
-        log("=== FASE 2: Categorie ({} keyword) ===".format(len(kws)))
+        log("=== FASE 2: Categorie ({} kw) ===".format(len(kws)))
         for kw in kws:
             if len(all_deals) >= MAX_DEALS_POOL:
                 break
@@ -841,7 +889,7 @@ def main():
         log("Zero. Fine.")
         return
 
-    # Ordina: deal attivi prima, poi has_deal, poi sconto decrescente
+    # Ordina e diversifica
     all_deals.sort(key=lambda d: (
         d.get("_is_active_deal", False),
         d.get("has_deal", False),
@@ -849,8 +897,8 @@ def main():
     ), reverse=True)
     all_deals = diversify_deals(all_deals)
 
-    # Offerta del giorno (9+)
-    if hour >= 9 and not is_posted(posted, "_top"):
+    # OFFERTA DEL GIORNO (>= 9)
+    if hour >= 9 and not is_special_posted(posted, "_top"):
         best = max(all_deals, key=lambda d: d["discount_percent"])
         log("TOP: {}... (-{}%)".format(best["title"][:35], best["discount_percent"]))
         if send_telegram(format_deal(best, special="top"), best.get("image_url"), make_share_button(best["asin"])):
@@ -861,7 +909,7 @@ def main():
             all_deals.remove(best)
             time.sleep(POST_INTERVAL_SECONDS)
 
-    # Pubblica offerte
+    # PUBBLICA OFFERTE
     pub = 0
     for d in all_deals:
         if pub >= MAX_POSTS_PER_CYCLE or not is_publish_time() or is_posted(posted, d["asin"]):
@@ -870,7 +918,7 @@ def main():
         sp = "flash" if d.get("has_deal") or d["discount_percent"] >= FLASH_DEAL_PERCENT else None
         cat = get_deal_category(d["title"])
         log("#{} [{}] {}... (-{}%){}".format(dn, cat, d["title"][:30], d["discount_percent"],
-            " [DEAL_ATTIVO]" if d.get("_is_active_deal") else ""))
+            " [DEAL]" if d.get("_is_active_deal") else ""))
         if send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"])):
             mark_posted(posted, d["asin"])
             save_posted(posted)
