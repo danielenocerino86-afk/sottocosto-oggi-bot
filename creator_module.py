@@ -57,12 +57,32 @@ def get_font(size, weight='bold'):
 
 
 def extract_asin(url):
+    """Estrae ASIN da URL Amazon. Supporta anche link brevi (amzn.to, amzn.eu)
+    risolvendoli con una HEAD request per ottenere l'URL finale."""
+    # Cerca ASIN diretto in URL completo
     m = re.search(r'/dp/([A-Z0-9]{10})', url)
     if m:
         return m.group(1)
     m = re.search(r'/gp/product/([A-Z0-9]{10})', url)
     if m:
         return m.group(1)
+
+    # Se e' un link breve, segui i redirect
+    if 'amzn.to' in url or 'amzn.eu' in url or 'amzn.asia' in url or 'a.co/d/' in url:
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
+            resp = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
+            final_url = resp.url
+            # Cerca ASIN nell'URL finale
+            m = re.search(r'/dp/([A-Z0-9]{10})', final_url)
+            if m:
+                return m.group(1)
+            m = re.search(r'/gp/product/([A-Z0-9]{10})', final_url)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+
     return None
 
 
@@ -599,7 +619,11 @@ def image_to_bytes(img):
 def handle_creator_command(api, url, partner_tag):
     asin = extract_asin(url)
     if not asin:
-        return None, None, None, "❌ Link Amazon non valido. Deve contenere /dp/CODICE"
+        return None, None, None, ("❌ Link Amazon non valido o non risolvibile.\n\n"
+                                   "Formati supportati:\n"
+                                   "• https://www.amazon.it/dp/CODICE\n"
+                                   "• https://amzn.to/CODICE\n"
+                                   "• https://amzn.eu/d/CODICE")
 
     data, err = get_product_data(api, asin, partner_tag)
     if err:
