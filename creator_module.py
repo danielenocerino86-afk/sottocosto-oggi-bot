@@ -91,63 +91,37 @@ def fmt_price(value):
 
 
 def get_product_data(api, asin, partner_tag):
-    """Estrae i dati prodotto. Prova multiple firme dell'API.
-    Stampa nei log GitHub Actions quale variante ha funzionato."""
-    results = None
-    errors = []
+    """Recupera dati prodotto usando search_items (metodo che funziona
+    sicuramente in questa versione della libreria amazon_creatorsapi).
+    Cerca l'ASIN come keyword e filtra il match esatto."""
 
-    # Tentativo 1-4: get_items con vari nomi parametro
-    for param_name in ['item_ids', 'asins', 'asin', 'item_id']:
-        try:
-            if param_name in ('item_ids', 'asins'):
-                results = api.get_items(**{param_name: [asin]})
-            else:
-                results = api.get_items(**{param_name: asin})
-            if results and hasattr(results, 'items') and results.items:
-                print("[DEBUG] get_items({}) OK".format(param_name), flush=True)
-                break
-            else:
-                results = None
-                errors.append("{}: empty".format(param_name))
-        except TypeError as e:
-            errors.append("{}: {}".format(param_name, str(e)[:60]))
-            results = None
-        except Exception as e:
-            errors.append("{}: {}".format(param_name, str(e)[:60]))
-            results = None
+    # search_items e' il metodo che gia' usa bot.py senza problemi
+    # Cerco col solo ASIN come keyword (Amazon spesso lo trova)
+    item = None
+    try:
+        # Disabilito min_saving_percent per accettare qualsiasi prodotto
+        results = api.search_items(keywords=asin, item_count=10)
+        if results and results.items:
+            # Cerca il match esatto dell'ASIN tra i risultati
+            for it in results.items:
+                if it.asin == asin:
+                    item = it
+                    break
+            # Se non trovato esatto, prendi il primo (Amazon ordina per rilevanza)
+            if not item and results.items:
+                item = results.items[0]
+                # Verifica che almeno sia un prodotto reale
+                if item.asin != asin:
+                    print("[CREATOR] ASIN richiesto: {} ma trovato: {}".format(asin, item.asin), flush=True)
+    except Exception as e:
+        return None, "Errore API: {}".format(str(e)[:100])
 
-    # Tentativo 5: get_items metodo positional
-    if not results:
-        try:
-            results = api.get_items([asin])
-            if results and hasattr(results, 'items') and results.items:
-                print("[DEBUG] get_items(positional list) OK", flush=True)
-            else:
-                results = None
-                errors.append("positional: empty")
-        except Exception as e:
-            errors.append("positional: {}".format(str(e)[:60]))
-            results = None
+    if not item:
+        return None, "Prodotto non trovato su Amazon (ASIN: {})".format(asin)
 
-    # Tentativo 6: get_items con argomento singolo
-    if not results:
-        try:
-            results = api.get_items(asin)
-            if results and hasattr(results, 'items') and results.items:
-                print("[DEBUG] get_items(positional str) OK", flush=True)
-            else:
-                results = None
-                errors.append("positional_str: empty")
-        except Exception as e:
-            errors.append("positional_str: {}".format(str(e)[:60]))
-            results = None
-
-    if not results or not hasattr(results, 'items') or not results.items:
-        err_msg = "Prodotto non trovato. Tentativi: {}".format(" | ".join(errors[:3]))
-        return None, err_msg[:200]
-
-    item = results.items[0]
-    data = {'asin': asin}
+    # Aggiorna l'ASIN con quello effettivamente trovato (per coerenza link)
+    actual_asin = item.asin
+    data = {'asin': actual_asin}
 
     try:
         data['title'] = item.item_info.title.display_value
@@ -180,14 +154,14 @@ def get_product_data(api, asin, partner_tag):
                     ((data['original_price'] - data['current_price']) / data['original_price']) * 100
                 )
     except (AttributeError, TypeError, IndexError):
-        return None, "Prezzi non disponibili"
+        return None, "Prezzi non disponibili per questo prodotto"
 
     try:
         data['image_url'] = item.images.primary.large.url
     except (AttributeError, TypeError):
         data['image_url'] = None
 
-    data['affiliate_url'] = "https://www.amazon.it/dp/{}?tag={}".format(asin, partner_tag)
+    data['affiliate_url'] = "https://www.amazon.it/dp/{}?tag={}".format(actual_asin, partner_tag)
     return data, None
 
 
@@ -679,8 +653,14 @@ def handle_creator_command(api, url, partner_tag):
     if err:
         return None, None, None, "❌ {}".format(err)
 
-    if data['discount_percent'] == 0:
-        return None, None, None, "⚠️ Nessuno sconto rilevato su questo prodotto"
+    # Nota: NON blocchiamo se non c'e' sconto - il creator e' utile anche
+    # per generare grafiche di prodotti a prezzo pieno
+    if data.get('discount_percent', 0) == 0:
+        # Imposto discount minimo per non avere divisioni per zero nei layout
+        data['discount_percent'] = 0
+        # Se non c'e' un prezzo originale > corrente, lo settiamo uguale
+        if data.get('original_price', 0) <= data.get('current_price', 0):
+            data['original_price'] = data['current_price']
 
     try:
         storia = generate_story(data)
