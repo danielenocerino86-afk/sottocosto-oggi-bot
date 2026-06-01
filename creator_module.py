@@ -91,12 +91,40 @@ def fmt_price(value):
 
 
 def get_product_data(api, asin, partner_tag):
-    try:
-        results = api.get_items(item_ids=[asin])
-    except Exception as e:
-        return None, "Errore API: {}".format(str(e)[:100])
+    # La libreria amazon_creatorsapi puo' avere nomi parametri diversi a seconda della versione
+    # Provo tutte le varianti possibili
+    results = None
+    last_err = None
+    for param_name in ['item_ids', 'asin', 'item_id', 'asins']:
+        for value_format in ([asin], asin):
+            # Salta combinazioni illogiche
+            if param_name in ('item_ids', 'asins') and not isinstance(value_format, list):
+                continue
+            if param_name in ('asin', 'item_id') and isinstance(value_format, list):
+                continue
+            try:
+                results = api.get_items(**{param_name: value_format})
+                if results:
+                    break
+            except TypeError as e:
+                last_err = str(e)
+                continue
+            except Exception as e:
+                last_err = str(e)
+                continue
+        if results:
+            break
+
+    # Se non funziona con get_items, provo search_items con l'ASIN come keyword
+    if not results:
+        try:
+            results = api.search_items(keywords=asin, item_count=1)
+        except Exception as e:
+            return None, "Errore API: {}".format(str(e)[:100])
 
     if not results or not results.items or len(results.items) == 0:
+        if last_err:
+            return None, "Prodotto non trovato. ({})".format(last_err[:80])
         return None, "Prodotto non trovato"
 
     item = results.items[0]
