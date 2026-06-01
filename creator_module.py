@@ -1,6 +1,6 @@
 """
-Modulo Creator per Sottocosto Oggi Bot v3
-Design migliorato: font Poppins, glow effects, prezzi affiancati, spazio link in storia.
+Modulo Creator per Sottocosto Oggi Bot v4 PREMIUM
+Design professionale con gerarchia tipografica, glow morbidi, layout pulito.
 """
 
 import os
@@ -11,42 +11,44 @@ import random
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-# Colori del brand (RGB)
+# Palette colori brand
 COLORS = {
-    'rosso': (211, 32, 39),
-    'rosso_dark': (139, 20, 25),
-    'oro': (244, 196, 48),
-    'oro_bright': (255, 215, 0),
-    'oro_glow': (255, 200, 50),
-    'blu': (10, 22, 51),
-    'blu_light': (26, 40, 81),
+    'bg_dark': (8, 14, 35),         # blu notte profondo
+    'bg_mid': (18, 28, 60),         # blu medio
+    'bg_light': (28, 42, 80),       # blu schiarito
+    'accent': (255, 71, 87),        # rosso vivo (piu' moderno)
+    'accent_dark': (200, 35, 50),
+    'gold': (255, 200, 60),         # oro caldo
+    'gold_bright': (255, 220, 100),
     'white': (255, 255, 255),
-    'gray': (170, 170, 170),
+    'off_white': (240, 240, 245),
+    'gray': (140, 145, 160),
+    'gray_dark': (80, 85, 100),
 }
 
-# Font Poppins (Google Fonts) - moderno e d'impatto
-# Fallback su DejaVu se non disponibile
 FONT_PATHS = {
     'bold': [
         '/usr/share/fonts/truetype/google-fonts/Poppins-Bold.ttf',
         '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
-    ],
-    'regular': [
-        '/usr/share/fonts/truetype/google-fonts/Poppins-Regular.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
     ],
     'medium': [
         '/usr/share/fonts/truetype/google-fonts/Poppins-Medium.ttf',
         '/usr/share/fonts/truetype/google-fonts/Poppins-Bold.ttf',
         '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
     ],
+    'regular': [
+        '/usr/share/fonts/truetype/google-fonts/Poppins-Regular.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    ],
+    'light': [
+        '/usr/share/fonts/truetype/google-fonts/Poppins-Light.ttf',
+        '/usr/share/fonts/truetype/google-fonts/Poppins-Regular.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    ],
 }
 
 
 def get_font(size, weight='bold'):
-    """Carica font con fallback su font di sistema."""
     for path in FONT_PATHS.get(weight, FONT_PATHS['bold']):
         if os.path.exists(path):
             try:
@@ -57,23 +59,17 @@ def get_font(size, weight='bold'):
 
 
 def extract_asin(url):
-    """Estrae ASIN da URL Amazon. Supporta anche link brevi (amzn.to, amzn.eu)
-    risolvendoli con una HEAD request per ottenere l'URL finale."""
-    # Cerca ASIN diretto in URL completo
     m = re.search(r'/dp/([A-Z0-9]{10})', url)
     if m:
         return m.group(1)
     m = re.search(r'/gp/product/([A-Z0-9]{10})', url)
     if m:
         return m.group(1)
-
-    # Se e' un link breve, segui i redirect
     if 'amzn.to' in url or 'amzn.eu' in url or 'amzn.asia' in url or 'a.co/d/' in url:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
             resp = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
             final_url = resp.url
-            # Cerca ASIN nell'URL finale
             m = re.search(r'/dp/([A-Z0-9]{10})', final_url)
             if m:
                 return m.group(1)
@@ -82,31 +78,21 @@ def extract_asin(url):
                 return m.group(1)
         except Exception:
             pass
-
     return None
 
 
 def fmt_price(value):
-    return "{:.2f}".format(value).replace('.', ',') + "€"
+    """Formatta prezzo italiano con virgola. Es: 168.75 -> '168,75 €'."""
+    return "{:.2f}".format(value).replace('.', ',') + " €"
 
 
 def get_product_data(api, asin, partner_tag):
-    """Recupera dati prodotto.
-
-    La libreria amazon_creatorsapi (parte di python-amazon-paapi 6.x) ha la firma:
-        items = api.get_items([asin1, asin2, ...])
-    Ritorna direttamente una LISTA di item (NON un oggetto con .items).
-    """
     item = None
-
     try:
-        # Chiamata corretta: lista positional, ritorna lista direttamente
         items = api.get_items([asin])
         if items and len(items) > 0:
             item = items[0]
-            # Verifica che sia un item valido (non un None per ASIN non trovato)
             if item is None or (hasattr(item, 'asin') and item.asin is None):
-                item = None
                 return None, "Prodotto non disponibile su Amazon (ASIN: {})".format(asin)
     except Exception as e:
         return None, "Errore API get_items: {}".format(str(e)[:120])
@@ -124,14 +110,14 @@ def get_product_data(api, asin, partner_tag):
 
     title = data['title']
     title = re.sub(r'\s+', ' ', title).strip()
+    # Tronca al primo separatore se il titolo e' troppo lungo
     cut = title.find(', ')
-    if 30 < cut < 100:
+    if 30 < cut < 90:
         title = title[:cut]
-    if len(title) > 80:
-        title = title[:80] + '...'
+    if len(title) > 70:
+        title = title[:70] + '...'
     data['title_short'] = title
 
-    # Estrai prezzi da offers_v2.listings
     try:
         listing = item.offers_v2.listings[0]
         p = listing.price
@@ -149,7 +135,6 @@ def get_product_data(api, asin, partner_tag):
                     ((data['original_price'] - data['current_price']) / data['original_price']) * 100
                 )
     except (AttributeError, TypeError, IndexError):
-        # Fallback: prova .offers.listings (vecchia firma)
         try:
             listing = item.offers.listings[0]
             data['current_price'] = listing.price.amount
@@ -186,181 +171,299 @@ def download_image(url):
     return None
 
 
-def draw_centered_text(draw, text, x, y, font, fill):
+# ============================================================
+# HELPERS DESIGN
+# ============================================================
+
+def get_text_size(draw, text, font):
     bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    # Offset per centratura verticale (bbox include il padding del font)
-    draw.text((x - tw // 2, y - th // 2 - bbox[1] // 2), text, font=font, fill=fill)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
-def draw_text_with_glow(draw, text, x, y, font, fill, glow_color, glow_size=8, img=None):
-    """Disegna testo con effetto glow (alone luminoso)."""
-    if img is None:
-        # Fallback: solo testo senza glow
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        draw.text((x - tw // 2, y - th // 2 - bbox[1] // 2), text, font=font, fill=fill)
-        return
+def draw_text(draw, text, x, y, font, fill, anchor='lt'):
+    """Disegna testo con anchor:
+    - 'lt' = left-top (default)
+    - 'mt' = middle-top (centrato orizzontalmente)
+    - 'mm' = middle-middle (centrato H+V)
+    - 'rt' = right-top (allineato a destra)
+    """
+    w, h = get_text_size(draw, text, font)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    offset_y = bbox[1]  # offset per allineamento corretto del top
 
-    # Crea layer per glow
-    glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    bbox = gd.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    # Disegna testo glow color
-    gd.text((x - tw // 2, y - th // 2 - bbox[1] // 2), text, font=font,
-            fill=glow_color + (180,))
-    # Blur per effetto bagliore
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=glow_size))
-    img.paste(glow, (0, 0), glow)
-    # Testo principale sopra
-    draw.text((x - tw // 2, y - th // 2 - bbox[1] // 2), text, font=font, fill=fill)
+    if anchor[0] == 'm':
+        x -= w // 2
+    elif anchor[0] == 'r':
+        x -= w
+    if anchor[1] == 'm':
+        y -= (h // 2) + offset_y // 2
+
+    draw.text((x, y), text, font=font, fill=fill)
 
 
-def draw_text_wrapped(draw, text, x, y, font, fill, max_width, line_height, max_lines=None):
-    """Disegna testo a capo automatico (centrato sull'asse X)."""
+def wrap_lines(draw, text, font, max_width, max_lines=3):
+    """Spezza testo in righe e ritorna la lista delle righe."""
     words = text.split()
     lines = []
     current = ''
     for word in words:
         test = (current + ' ' + word).strip()
-        bbox = draw.textbbox((0, 0), test, font=font)
-        if bbox[2] - bbox[0] > max_width and current:
+        w, _ = get_text_size(draw, test, font)
+        if w > max_width and current:
             lines.append(current)
             current = word
         else:
             current = test
     if current:
         lines.append(current)
-    if max_lines and len(lines) > max_lines:
+    if len(lines) > max_lines:
         lines = lines[:max_lines]
+        # Aggiungi ... all'ultima riga
         last = lines[-1]
         while True:
-            bbox = draw.textbbox((0, 0), last + '...', font=font)
-            if bbox[2] - bbox[0] <= max_width or len(last) <= 3:
+            w, _ = get_text_size(draw, last + '...', font)
+            if w <= max_width or len(last) <= 3:
                 break
             last = last[:-1]
         lines[-1] = last + '...'
-
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        tw = bbox[2] - bbox[0]
-        draw.text((x - tw // 2, y), line, font=font, fill=fill)
-        y += line_height
-    return y
+    return lines
 
 
-def draw_text_wrapped_left(draw, text, x, y, font, fill, max_width, line_height, max_lines=None):
-    """Allineato a sinistra."""
-    words = text.split()
-    lines = []
-    current = ''
-    for word in words:
-        test = (current + ' ' + word).strip()
-        bbox = draw.textbbox((0, 0), test, font=font)
-        if bbox[2] - bbox[0] > max_width and current:
-            lines.append(current)
-            current = word
-        else:
-            current = test
-    if current:
-        lines.append(current)
-    if max_lines and len(lines) > max_lines:
-        lines = lines[:max_lines]
-        last = lines[-1]
-        while True:
-            bbox = draw.textbbox((0, 0), last + '...', font=font)
-            if bbox[2] - bbox[0] <= max_width or len(last) <= 3:
-                break
-            last = last[:-1]
-        lines[-1] = last + '...'
-
-    for line in lines:
-        draw.text((x, y), line, font=font, fill=fill)
-        y += line_height
-    return y
-
-
-def draw_radial_background(img, center_x, center_y, max_radius):
+def draw_radial_bg(img, cx, cy, max_r):
+    """Sfondo radiale dal centro (chiaro) all'esterno (scuro)."""
     draw = ImageDraw.Draw(img)
-    for r in range(max_radius, 0, -8):
-        t = r / max_radius
+    for r in range(max_r, 0, -6):
+        t = r / max_r
+        # Interpolazione: bg_light al centro, bg_dark fuori
         color = tuple(
-            int(COLORS['blu_light'][i] * (1 - t) + COLORS['blu'][i] * t)
+            int(COLORS['bg_light'][i] * (1 - t) + COLORS['bg_dark'][i] * t)
             for i in range(3)
         )
-        draw.ellipse([center_x - r, center_y - r, center_x + r, center_y + r], fill=color)
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
 
 
-def draw_rays(img, center_x, center_y, num_rays=24, alpha=20):
+def draw_soft_rays(img, cx, cy, num=20, alpha=14):
+    """Raggi morbidi dal centro - molto sottili e diffusi."""
     overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     max_dist = max(img.size) * 1.5
-    half_angle = math.pi / num_rays / 2
-    for i in range(num_rays):
+    for i in range(num):
         if i % 2 == 1:
             continue
-        angle = (math.pi * 2 / num_rays) * i
-        x1 = center_x + math.cos(angle - half_angle) * max_dist
-        y1 = center_y + math.sin(angle - half_angle) * max_dist
-        x2 = center_x + math.cos(angle + half_angle) * max_dist
-        y2 = center_y + math.sin(angle + half_angle) * max_dist
-        draw.polygon([(center_x, center_y), (x1, y1), (x2, y2)],
-                     fill=(255, 215, 0, alpha))
+        angle = (math.pi * 2 / num) * i
+        half_ang = math.pi / num / 3
+        x1 = cx + math.cos(angle - half_ang) * max_dist
+        y1 = cy + math.sin(angle - half_ang) * max_dist
+        x2 = cx + math.cos(angle + half_ang) * max_dist
+        y2 = cy + math.sin(angle + half_ang) * max_dist
+        draw.polygon([(cx, cy), (x1, y1), (x2, y2)],
+                     fill=(COLORS['gold'][0], COLORS['gold'][1], COLORS['gold'][2], alpha))
     return Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
 
 
-def add_sparkles(img, count=40):
+def add_noise_texture(img, alpha=8):
+    """Aggiunge granulosita' premium subliminale."""
     overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    for _ in range(count):
+    for _ in range(800):
         x = random.randint(0, img.width)
         y = random.randint(0, img.height)
-        r = random.randint(2, 5)
-        alpha = random.randint(120, 220)
-        draw.ellipse([x - r, y - r, x + r, y + r], fill=(255, 215, 0, alpha))
+        size = random.choice([1, 1, 1, 2])
+        color = random.choice([
+            (255, 255, 255, alpha),
+            (COLORS['gold'][0], COLORS['gold'][1], COLORS['gold'][2], alpha + 5),
+        ])
+        draw.point((x, y), fill=color)
+        if size == 2:
+            draw.point((x + 1, y), fill=color)
     return Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
 
 
-def add_glow_layer(img, x, y, w, h, color, blur=30):
-    """Aggiunge un alone luminoso intorno a un'area."""
+def add_corner_glow(img, position='top-left', color=None, intensity=120, size_pct=0.5):
+    """Glow morbido in un angolo per profondita'."""
+    if color is None:
+        color = COLORS['accent']
+    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    positions = {
+        'top-left': (0, 0),
+        'top-right': (img.width, 0),
+        'bottom-left': (0, img.height),
+        'bottom-right': (img.width, img.height),
+        'center': (img.width // 2, img.height // 2),
+    }
+    cx, cy = positions.get(position, (0, 0))
+    radius = int(max(img.size) * size_pct)
+
+    for r in range(radius, 0, -10):
+        t = r / radius
+        alpha = int(intensity * (1 - t) ** 2)
+        if alpha < 1:
+            continue
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r],
+                     fill=(color[0], color[1], color[2], alpha))
+
+    # Blur per renderlo morbido
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=60))
+    return Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+
+
+def draw_glow_text(img, text, x, y, font, fill, glow_color, glow_size=15, anchor='lt'):
+    """Disegna testo con glow morbido sotto."""
+    # Layer glow
     glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.rectangle([x, y, x + w, y + h], fill=color + (100,))
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=blur))
-    return Image.alpha_composite(img.convert('RGBA'), glow).convert('RGB')
+    w, h = get_text_size(gd, text, font)
+    bbox = gd.textbbox((0, 0), text, font=font)
+    offset_y = bbox[1]
+
+    gx, gy = x, y
+    if anchor[0] == 'm':
+        gx -= w // 2
+    elif anchor[0] == 'r':
+        gx -= w
+    if anchor[1] == 'm':
+        gy -= (h // 2) + offset_y // 2
+
+    # Disegna testo glow esteso
+    glow_alpha = 180
+    gd.text((gx, gy), text, font=font,
+            fill=(glow_color[0], glow_color[1], glow_color[2], glow_alpha))
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=glow_size))
+    img.paste(glow, (0, 0), glow)
+
+    # Testo principale
+    draw = ImageDraw.Draw(img)
+    draw.text((gx, gy), text, font=font, fill=fill)
 
 
-def draw_placeholder_box(draw, x, y, w, h, text="IMMAGINE NON DISPONIBILE"):
-    draw.rectangle([x, y, x + w, y + h], fill=COLORS['white'])
-    font = get_font(28)
-    draw_centered_text(draw, text, x + w // 2, y + h // 2, font, COLORS['gray'])
-
-
-def paste_product_image(img, prod_img, box_x, box_y, box_w, box_h):
+def paste_product_image(img, prod_img, cx, cy, max_size):
+    """Centra immagine prodotto. Senza cornice."""
     if not prod_img:
         return
-    ratio = min(box_w / prod_img.width, box_h / prod_img.height) * 0.92
+    ratio = min(max_size / prod_img.width, max_size / prod_img.height)
     new_w = int(prod_img.width * ratio)
     new_h = int(prod_img.height * ratio)
     prod_img = prod_img.resize((new_w, new_h), Image.LANCZOS)
-    cx = box_x + box_w // 2
-    cy = box_y + box_h // 2
     img.paste(prod_img, (cx - new_w // 2, cy - new_h // 2),
               prod_img if prod_img.mode == 'RGBA' else None)
 
 
-def draw_brand_header(draw, x, y, scale=1.0):
-    """Logo brand SOTTOCOSTO OGGI come header testuale stilizzato."""
+def draw_rounded_rect(draw, xy, radius, fill=None, outline=None, width=1):
+    """Rettangolo arrotondato."""
+    x1, y1, x2, y2 = xy
+    draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill)
+    draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill)
+    draw.pieslice([x1, y1, x1 + 2*radius, y1 + 2*radius], 180, 270, fill=fill)
+    draw.pieslice([x2 - 2*radius, y1, x2, y1 + 2*radius], 270, 360, fill=fill)
+    draw.pieslice([x1, y2 - 2*radius, x1 + 2*radius, y2], 90, 180, fill=fill)
+    draw.pieslice([x2 - 2*radius, y2 - 2*radius, x2, y2], 0, 90, fill=fill)
+    if outline:
+        # Disegna bordo arrotondato
+        draw.arc([x1, y1, x1 + 2*radius, y1 + 2*radius], 180, 270, fill=outline, width=width)
+        draw.arc([x2 - 2*radius, y1, x2, y1 + 2*radius], 270, 360, fill=outline, width=width)
+        draw.arc([x1, y2 - 2*radius, x1 + 2*radius, y2], 90, 180, fill=outline, width=width)
+        draw.arc([x2 - 2*radius, y2 - 2*radius, x2, y2], 0, 90, fill=outline, width=width)
+        draw.line([x1 + radius, y1, x2 - radius, y1], fill=outline, width=width)
+        draw.line([x1 + radius, y2, x2 - radius, y2], fill=outline, width=width)
+        draw.line([x1, y1 + radius, x1, y2 - radius], fill=outline, width=width)
+        draw.line([x2, y1 + radius, x2, y2 - radius], fill=outline, width=width)
+
+
+def draw_horizontal_line_gradient(draw, x1, x2, y, color, width=2):
+    """Linea orizzontale con fade ai bordi."""
+    length = x2 - x1
+    for i in range(length):
+        t = i / length
+        # Fade-in e fade-out ai bordi
+        if t < 0.15:
+            alpha = int(255 * (t / 0.15))
+        elif t > 0.85:
+            alpha = int(255 * ((1 - t) / 0.15))
+        else:
+            alpha = 255
+        if alpha > 0:
+            for w in range(width):
+                draw.point((x1 + i, y + w), fill=(color[0], color[1], color[2]))
+
+
+# ============================================================
+# LOGO BRAND
+# ============================================================
+
+def draw_brand_logo(img, x, y, scale=1.0, with_separator=True):
+    """Logo SOTTOCOSTO con OGGI in box rosso (richiamo al logo originale)."""
+    draw = ImageDraw.Draw(img)
     # SOTTOCOSTO grande in oro
-    font_big = get_font(int(56 * scale))
-    draw_centered_text(draw, "SOTTOCOSTO", x, y, font_big, COLORS['oro_bright'])
-    # OGGI piu piccolo, sotto, in bianco/oro
-    font_med = get_font(int(38 * scale))
-    draw_centered_text(draw, "OGGI", x, y + int(55 * scale), font_med, COLORS['white'])
+    font_main = get_font(int(48 * scale))
+    draw_glow_text(img, "SOTTOCOSTO", x, y, font_main, COLORS['gold_bright'],
+                   COLORS['gold'], glow_size=8, anchor='mt')
+
+    # OGGI in box rosso piccolo, sotto
+    draw = ImageDraw.Draw(img)
+    font_sub = get_font(int(22 * scale))
+    oggi_text = "OGGI"
+    w_oggi, h_oggi = get_text_size(draw, oggi_text, font_sub)
+    pad_h = int(14 * scale)
+    pad_v = int(6 * scale)
+    box_w = w_oggi + pad_h * 2
+    box_h = h_oggi + pad_v * 2
+    box_x1 = x - box_w // 2
+    box_y1 = y + int(58 * scale)
+    box_x2 = box_x1 + box_w
+    box_y2 = box_y1 + box_h
+    draw_rounded_rect(draw, (box_x1, box_y1, box_x2, box_y2), int(4 * scale),
+                      fill=COLORS['accent'])
+    draw_text(draw, oggi_text, x, box_y1 + pad_v + 2, font_sub, COLORS['white'], anchor='mt')
+
+    if with_separator:
+        # Linea decorativa sotto
+        sep_y = box_y2 + int(20 * scale)
+        sep_len = int(160 * scale)
+        # Linea con punto centrale oro
+        draw.line([(x - sep_len // 2, sep_y), (x - 8, sep_y)],
+                  fill=COLORS['gold'], width=2)
+        draw.line([(x + 8, sep_y), (x + sep_len // 2, sep_y)],
+                  fill=COLORS['gold'], width=2)
+        # Diamantino centrale
+        draw.polygon([(x, sep_y - 5), (x + 5, sep_y), (x, sep_y + 5), (x - 5, sep_y)],
+                     fill=COLORS['gold_bright'])
+
+
+# ============================================================
+# DISCOUNT BADGE
+# ============================================================
+
+def draw_discount_badge(img, x, y, percent, size=140):
+    """Badge sconto circolare premium con doppio bordo."""
+    if percent <= 0:
+        return
+    draw = ImageDraw.Draw(img)
+    # Glow esterno
+    glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([x - size - 20, y - size - 20, x + size + 20, y + size + 20],
+               fill=(COLORS['accent'][0], COLORS['accent'][1], COLORS['accent'][2], 80))
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=20))
+    img.paste(glow, (0, 0), glow)
+
+    draw = ImageDraw.Draw(img)
+    # Cerchio esterno oro (anello)
+    draw.ellipse([x - size, y - size, x + size, y + size], fill=COLORS['gold'])
+    # Cerchio interno rosso
+    inner = size - 10
+    draw.ellipse([x - inner, y - inner, x + inner, y + inner], fill=COLORS['accent'])
+    # Anello interno sottile oro
+    inner2 = inner - 8
+    draw.ellipse([x - inner2, y - inner2, x + inner2, y + inner2],
+                 outline=COLORS['gold_bright'], width=2)
+
+    # Testo
+    font_pct_big = get_font(int(size * 0.55))
+    font_pct_sm = get_font(int(size * 0.25))
+    text_big = "-{}%".format(percent)
+    draw_text(draw, text_big, x, y, font_pct_big, COLORS['white'], anchor='mm')
 
 
 # ============================================================
@@ -369,114 +472,116 @@ def draw_brand_header(draw, x, y, scale=1.0):
 
 def generate_story(data):
     W, H = 1080, 1920
-    img = Image.new('RGB', (W, H), COLORS['blu'])
+    img = Image.new('RGB', (W, H), COLORS['bg_dark'])
 
-    draw_radial_background(img, W // 2, H // 2, 1300)
-    img = draw_rays(img, W // 2, H // 2, num_rays=24, alpha=18)
-    img = add_sparkles(img, count=60)
+    # Sfondo radiale + raggi morbidi + rumore
+    draw_radial_bg(img, W // 2, H // 2, 1400)
+    img = draw_soft_rays(img, W // 2, H // 2, num=20, alpha=12)
+    img = add_corner_glow(img, 'top-left', COLORS['accent'], intensity=80, size_pct=0.6)
+    img = add_corner_glow(img, 'bottom-right', COLORS['gold'], intensity=70, size_pct=0.5)
+    img = add_noise_texture(img, alpha=6)
 
     draw = ImageDraw.Draw(img)
 
-    # ============ LOGO BRAND IN ALTO ============
-    draw_brand_header(draw, W // 2, 70)
-
-    # Divisore decorativo oro
-    draw.line([(280, 200), (800, 200)], fill=COLORS['oro_bright'], width=3)
-    # Diamantino centrale
-    cx_d, cy_d = W // 2, 200
-    draw.polygon([(cx_d, cy_d - 10), (cx_d + 10, cy_d), (cx_d, cy_d + 10), (cx_d - 10, cy_d)],
-                 fill=COLORS['oro_bright'])
-
-    # ============ STRISCIONE OFFERTA AMAZON ============
-    draw.polygon([(60, 240), (1020, 240), (1020, 350), (540, 395), (60, 350)],
-                 fill=COLORS['rosso'], outline=COLORS['oro_bright'], width=5)
-    font_title = get_font(64)
-    draw_centered_text(draw, "OFFERTA AMAZON", W // 2, 300, font_title, COLORS['oro_bright'])
-
-    # ============ BADGE SCONTO CIRCOLARE ============
-    cx, cy, cr = W // 2, 540, 145
-    img = add_glow_layer(img, cx - cr - 30, cy - cr - 30, cr * 2 + 60, cr * 2 + 60,
-                         COLORS['rosso'], blur=40)
+    # ============ HEADER: LOGO BRAND ============
+    draw_brand_logo(img, W // 2, 100, scale=1.3, with_separator=True)
     draw = ImageDraw.Draw(img)
-    draw.ellipse([cx - cr, cy - cr, cx + cr, cy + cr],
-                 fill=COLORS['rosso'], outline=COLORS['oro_bright'], width=10)
-    pct_text = "-{}%".format(data['discount_percent'])
-    font_pct = get_font(95)
-    draw_centered_text(draw, pct_text, cx, cy, font_pct, COLORS['oro_bright'])
 
-    # ============ CORNICE IMMAGINE PRODOTTO ============
-    img_x, img_y, img_w, img_h = 165, 740, 750, 750
-    draw.rectangle([img_x, img_y, img_x + img_w, img_y + img_h], fill=COLORS['oro_bright'])
-    pad = 18
-    draw.rectangle([img_x + pad, img_y + pad, img_x + img_w - pad, img_y + img_h - pad],
-                   fill=COLORS['white'])
+    # ============ TAG "OFFERTA EXCLUSIVE" ============
+    # piccola etichetta minimal sopra il prodotto
+    tag_text = "OFFERTA SU AMAZON"
+    font_tag = get_font(28, 'medium')
+    tw, th = get_text_size(draw, tag_text, font_tag)
+    # Box arrotondato sottile
+    tag_x = W // 2
+    tag_y = 310
+    pad = 22
+    box_h = 50
+    draw_rounded_rect(draw, (tag_x - (tw // 2 + pad), tag_y - box_h // 2,
+                              tag_x + (tw // 2 + pad), tag_y + box_h // 2),
+                      box_h // 2, fill=None, outline=COLORS['gold'], width=2)
+    draw_text(draw, tag_text, tag_x, tag_y, font_tag, COLORS['gold_bright'], anchor='mm')
 
+    # ============ IMMAGINE PRODOTTO - NO CORNICE, IL PRODOTTO E' L'EROE ============
     prod_img = download_image(data.get('image_url'))
     if prod_img:
-        paste_product_image(img, prod_img, img_x + pad, img_y + pad, img_w - 2*pad, img_h - 2*pad)
+        # Glow morbido dietro l'immagine prodotto
+        glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.ellipse([200, 450, 880, 1130], fill=(255, 255, 255, 30))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=80))
+        img.paste(glow, (0, 0), glow)
+        # Immagine
+        paste_product_image(img, prod_img, W // 2, 790, 740)
         draw = ImageDraw.Draw(img)
     else:
-        draw_placeholder_box(draw, img_x + pad, img_y + pad, img_w - 2*pad, img_h - 2*pad)
+        # Placeholder elegante
+        draw_rounded_rect(draw, (200, 450, 880, 1130), 30,
+                          fill=COLORS['bg_mid'], outline=COLORS['gold'], width=3)
+        font_ph = get_font(36, 'light')
+        draw_text(draw, "IMMAGINE", W // 2, 790, font_ph, COLORS['gray'], anchor='mm')
+
+    # ============ BADGE SCONTO sovrapposto in alto a destra dell'immagine ============
+    if data['discount_percent'] > 0:
+        draw_discount_badge(img, 870, 530, data['discount_percent'], size=110)
+        draw = ImageDraw.Draw(img)
 
     # ============ NOME PRODOTTO ============
-    font_name = get_font(42)
-    draw_text_wrapped(draw, data['title_short'], W // 2, 1530,
-                      font_name, COLORS['white'], 1000, 52, max_lines=3)
+    font_name = get_font(48, 'bold')
+    lines = wrap_lines(draw, data['title_short'], font_name, 940, max_lines=3)
+    name_y = 1230
+    for line in lines:
+        draw_text(draw, line, W // 2, name_y, font_name, COLORS['white'], anchor='mt')
+        name_y += 60
 
-    # ============ PREZZI AFFIANCATI ============
-    # Layout: PREZZO_ORIGINALE_BARRATO  ➜  PREZZO_NUOVO
-    saving = data['original_price'] - data['current_price']
+    # ============ DIVISORE ELEGANTE ============
+    sep_y = name_y + 30
+    draw.line([(380, sep_y), (700, sep_y)], fill=COLORS['gold'], width=2)
+    draw.polygon([(W // 2, sep_y - 6), (W // 2 + 6, sep_y), (W // 2, sep_y + 6), (W // 2 - 6, sep_y)],
+                 fill=COLORS['gold_bright'])
 
-    orig_text = fmt_price(data['original_price'])
-    sc_text = fmt_price(data['current_price'])
+    # ============ PREZZI PREMIUM ============
+    # Layout verticale per la storia (piu' impatto)
+    # Riga 1: prezzo originale piccolo barrato
+    # Riga 2: prezzo grande in oro
 
-    # Misura larghezze
-    font_orig = get_font(50, 'regular')
-    font_sc = get_font(100)
-    bbox_orig = draw.textbbox((0, 0), orig_text, font=font_orig)
-    w_orig = bbox_orig[2] - bbox_orig[0]
-    h_orig = bbox_orig[3] - bbox_orig[1]
-    bbox_sc = draw.textbbox((0, 0), sc_text, font=font_sc)
-    w_sc = bbox_sc[2] - bbox_sc[0]
-    h_sc = bbox_sc[3] - bbox_sc[1]
+    if data['discount_percent'] > 0:
+        # Da
+        font_da = get_font(28, 'light')
+        draw_text(draw, "DA", W // 2 - 130, sep_y + 50, font_da, COLORS['gray'], anchor='mt')
+        # Prezzo originale
+        font_orig = get_font(50, 'medium')
+        orig_text = fmt_price(data['original_price'])
+        orig_w, _ = get_text_size(draw, orig_text, font_orig)
+        ox = W // 2 - 60
+        oy = sep_y + 40
+        draw_text(draw, orig_text, ox, oy, font_orig, COLORS['gray'], anchor='lt')
+        # Linea barrata
+        line_y = oy + 35
+        draw.line([(ox - 8, line_y), (ox + orig_w + 8, line_y)],
+                  fill=COLORS['accent'], width=4)
 
-    # Larghezza freccia
-    arrow_w = 60
-    gap = 35
-    total_w = w_orig + gap + arrow_w + gap + w_sc
-    start_x = (W - total_w) // 2
+        # A
+        a_y = sep_y + 130
+        font_a = get_font(28, 'light')
+        draw_text(draw, "ORA SOLO", W // 2, a_y, font_a, COLORS['gold'], anchor='mt')
 
-    # Baseline comune (centro verticale del prezzo scontato)
-    y_baseline = 1760
-    sc_y = y_baseline - h_sc // 2
-    # Prezzo originale piu' piccolo, centrato verticalmente sulla stessa baseline
-    orig_y = y_baseline - h_orig // 2
-
-    # Prezzo originale barrato
-    draw.text((start_x, orig_y), orig_text, font=font_orig, fill=COLORS['gray'])
-    line_y = orig_y + h_orig // 2 + 5
-    draw.line([(start_x - 8, line_y), (start_x + w_orig + 8, line_y)],
-              fill=COLORS['rosso'], width=5)
-
-    # Freccia oro
-    arrow_x = start_x + w_orig + gap
-    arrow_y = y_baseline
-    draw.line([(arrow_x, arrow_y), (arrow_x + arrow_w - 18, arrow_y)],
-              fill=COLORS['oro_bright'], width=6)
-    draw.polygon([(arrow_x + arrow_w, arrow_y),
-                  (arrow_x + arrow_w - 20, arrow_y - 14),
-                  (arrow_x + arrow_w - 20, arrow_y + 14)],
-                 fill=COLORS['oro_bright'])
-
-    # Prezzo scontato con glow
-    sc_x = arrow_x + arrow_w + gap
-    img = add_glow_layer(img, sc_x - 20, sc_y - 15, w_sc + 40, h_sc + 30,
-                         COLORS['oro_bright'], blur=30)
+    # Prezzo principale - GIGANTE in oro con glow
+    main_y = sep_y + 195
+    font_main = get_font(160, 'bold')
+    main_text = fmt_price(data['current_price'])
+    draw_glow_text(img, main_text, W // 2, main_y, font_main,
+                   COLORS['gold_bright'], COLORS['gold'], glow_size=25, anchor='mt')
     draw = ImageDraw.Draw(img)
-    draw.text((sc_x, sc_y), sc_text, font=font_sc, fill=COLORS['oro_bright'])
 
-    # ============ SPAZIO VUOTO PER LINK INSTAGRAM ============
-    # Lasciamo libero y 1870-1920 per il sticker link IG
+    # ============ FOOTER MINIMAL ============
+    # solo "@sottocosto_oggi" piccolissimo, lo spazio sotto resta vuoto per il link IG
+    footer_y = 1830
+    font_handle = get_font(26, 'medium')
+    draw_text(draw, "@sottocosto_oggi", W // 2, footer_y, font_handle, COLORS['gold'], anchor='mt')
+    font_footer_sm = get_font(18, 'light')
+    draw_text(draw, "scopri tutte le offerte su Telegram", W // 2, footer_y + 38,
+              font_footer_sm, COLORS['gray'], anchor='mt')
 
     return img
 
@@ -487,129 +592,137 @@ def generate_story(data):
 
 def generate_post(data):
     W, H = 1080, 1080
-    img = Image.new('RGB', (W, H), COLORS['blu'])
+    img = Image.new('RGB', (W, H), COLORS['bg_dark'])
 
-    draw_radial_background(img, W // 2, H // 2, 900)
-    img = draw_rays(img, W // 2, H // 2, num_rays=20, alpha=16)
-    img = add_sparkles(img, count=35)
+    draw_radial_bg(img, W // 2, H // 2, 900)
+    img = draw_soft_rays(img, W // 2, H // 2, num=16, alpha=10)
+    img = add_corner_glow(img, 'top-left', COLORS['accent'], intensity=70, size_pct=0.4)
+    img = add_corner_glow(img, 'bottom-right', COLORS['gold'], intensity=60, size_pct=0.4)
+    img = add_noise_texture(img, alpha=5)
 
     draw = ImageDraw.Draw(img)
 
-    # ============ HEADER BRAND CENTRATO IN ALTO ============
-    draw_brand_header(draw, W // 2, 40, scale=0.65)
+    # ============ HEADER BRAND minimal in alto ============
+    # tutto su una riga: SOTTOCOSTO [OGGI rosso] · @sottocosto_oggi
+    header_y = 50
+    font_brand = get_font(34, 'bold')
+    draw_text(draw, "SOTTOCOSTO", W // 2 - 80, header_y, font_brand, COLORS['gold_bright'], anchor='rt')
 
-    # Divisore decorativo
-    draw.line([(380, 130), (700, 130)], fill=COLORS['oro_bright'], width=2)
+    # OGGI in box rosso
+    font_oggi = get_font(22, 'bold')
+    oggi_text = "OGGI"
+    w_oggi, _ = get_text_size(draw, oggi_text, font_oggi)
+    pad_h = 12
+    box_x1 = W // 2 - 70
+    box_y1 = header_y - 2
+    box_x2 = box_x1 + w_oggi + pad_h * 2
+    box_y2 = box_y1 + 38
+    draw_rounded_rect(draw, (box_x1, box_y1, box_x2, box_y2), 4, fill=COLORS['accent'])
+    draw_text(draw, oggi_text, box_x1 + pad_h, box_y1 + 8, font_oggi, COLORS['white'])
 
-    # ============ PANNELLO IMMAGINE SINISTRO ============
-    img_x, img_y, img_w, img_h = 40, 240, 460, 620
-    draw.rectangle([img_x, img_y, img_x + img_w, img_y + img_h], fill=COLORS['oro_bright'])
-    pad = 14
-    draw.rectangle([img_x + pad, img_y + pad, img_x + img_w - pad, img_y + img_h - pad],
-                   fill=COLORS['white'])
+    # Linea decorativa sotto
+    draw.line([(180, 130), (520, 130)], fill=COLORS['gold'], width=1)
+    draw.polygon([(W // 2, 124), (W // 2 + 5, 130), (W // 2, 136), (W // 2 - 5, 130)],
+                 fill=COLORS['gold_bright'])
+    draw.line([(560, 130), (900, 130)], fill=COLORS['gold'], width=1)
 
+    # ============ LAYOUT 2 COLONNE ============
+    # Sinistra: immagine prodotto su sfondo morbido
+    # Destra: testo + prezzi
+
+    # GLOW dietro al prodotto (sostituisce la cornice)
     prod_img = download_image(data.get('image_url'))
     if prod_img:
-        paste_product_image(img, prod_img, img_x + pad, img_y + pad, img_w - 2*pad, img_h - 2*pad)
+        glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.ellipse([20, 200, 560, 880], fill=(255, 255, 255, 25))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=60))
+        img.paste(glow, (0, 0), glow)
+        paste_product_image(img, prod_img, 290, 540, 530)
         draw = ImageDraw.Draw(img)
     else:
-        draw_placeholder_box(draw, img_x + pad, img_y + pad, img_w - 2*pad, img_h - 2*pad,
-                            text="NO IMG")
+        draw_rounded_rect(draw, (50, 220, 540, 860), 20,
+                          fill=COLORS['bg_mid'], outline=COLORS['gold'], width=2)
+        font_ph = get_font(28, 'light')
+        draw_text(draw, "IMG", 290, 540, font_ph, COLORS['gray'], anchor='mm')
 
-    # ============ BADGE SCONTO sopra immagine ============
-    img = add_glow_layer(img, 20, 145, 500, 100, COLORS['rosso'], blur=25)
-    draw = ImageDraw.Draw(img)
-    draw.polygon([(40, 160), (500, 160), (500, 245), (270, 270), (40, 245)],
-                 fill=COLORS['rosso'], outline=COLORS['oro_bright'], width=4)
-    font_pct = get_font(75)
-    pct_text = "-{}%".format(data['discount_percent'])
-    draw_centered_text(draw, pct_text, 270, 205, font_pct, COLORS['oro_bright'])
-
-    # ============ HANDLE CANALE in basso a sinistra ============
-    font_chan = get_font(28)
-    draw_centered_text(draw, "@sottocosto_oggi", 270, 905, font_chan, COLORS['oro_bright'])
-    font_sm = get_font(20, 'regular')
-    draw_centered_text(draw, "su Telegram", 270, 945, font_sm, COLORS['white'])
+    # Badge sconto sovrapposto
+    if data['discount_percent'] > 0:
+        draw_discount_badge(img, 100, 250, data['discount_percent'], size=80)
+        draw = ImageDraw.Draw(img)
 
     # ============ PANNELLO DESTRO ============
-    # Striscione titolo
-    img = add_glow_layer(img, 540, 145, 500, 100, COLORS['rosso'], blur=20)
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([560, 160, 1040, 250], fill=COLORS['rosso'],
-                   outline=COLORS['oro_bright'], width=3)
-    font_h = get_font(36)
-    draw_centered_text(draw, "OFFERTA AMAZON", 800, 205, font_h, COLORS['oro_bright'])
+    right_x = 600
+    right_w = 440
 
-    # Nome prodotto (allineato a sinistra)
-    font_name = get_font(34)
-    draw_text_wrapped_left(draw, data['title_short'], 570, 290,
-                           font_name, COLORS['white'], 460, 46, max_lines=4)
+    # Tag minimal
+    tag_y = 200
+    font_tag = get_font(20, 'medium')
+    draw_text(draw, "OFFERTA SU AMAZON", right_x, tag_y, font_tag, COLORS['gold'])
 
-    # ============ PREZZI AFFIANCATI ============
-    # Box prezzi con glow
-    img = add_glow_layer(img, 540, 530, 500, 200, COLORS['oro_bright'], blur=20)
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([560, 550, 1040, 730], fill=(0, 0, 0),
-                   outline=COLORS['oro_bright'], width=4)
+    # Nome prodotto - tipografia grande
+    font_name = get_font(36, 'bold')
+    lines = wrap_lines(draw, data['title_short'], font_name, right_w, max_lines=4)
+    ny = tag_y + 40
+    for line in lines:
+        draw_text(draw, line, right_x, ny, font_name, COLORS['white'])
+        ny += 46
 
-    saving = data['original_price'] - data['current_price']
-    orig_text = fmt_price(data['original_price'])
+    # Divisore
+    div_y = ny + 15
+    draw.line([(right_x, div_y), (right_x + 60, div_y)], fill=COLORS['gold'], width=3)
+
+    # PREZZI
+    price_y = div_y + 35
+    if data['discount_percent'] > 0:
+        # "Da" piccolo
+        font_label = get_font(18, 'light')
+        draw_text(draw, "DA", right_x, price_y, font_label, COLORS['gray'])
+
+        # Prezzo originale piccolo barrato
+        font_orig = get_font(32, 'medium')
+        orig_text = fmt_price(data['original_price'])
+        orig_w, _ = get_text_size(draw, orig_text, font_orig)
+        ox = right_x + 50
+        draw_text(draw, orig_text, ox, price_y - 5, font_orig, COLORS['gray'])
+        # Barra
+        draw.line([(ox - 5, price_y + 15), (ox + orig_w + 5, price_y + 15)],
+                  fill=COLORS['accent'], width=3)
+
+        # "Ora solo"
+        font_now = get_font(18, 'light')
+        draw_text(draw, "ORA SOLO", right_x, price_y + 50, font_now, COLORS['gold'])
+
+    # Prezzo grande
+    sc_y = price_y + 80 if data['discount_percent'] > 0 else price_y
+    font_main = get_font(78, 'bold')
     sc_text = fmt_price(data['current_price'])
-
-    font_orig_p = get_font(32, 'regular')
-    font_sc_p = get_font(64)
-    bbox_orig_p = draw.textbbox((0, 0), orig_text, font=font_orig_p)
-    w_orig_p = bbox_orig_p[2] - bbox_orig_p[0]
-    h_orig_p = bbox_orig_p[3] - bbox_orig_p[1]
-    bbox_sc_p = draw.textbbox((0, 0), sc_text, font=font_sc_p)
-    w_sc_p = bbox_sc_p[2] - bbox_sc_p[0]
-    h_sc_p = bbox_sc_p[3] - bbox_sc_p[1]
-
-    # Layout: orig ➜ scont, centrato nel box (560 - 1040, box center = 800)
-    arrow_w_p = 40
-    gap_p = 25
-    total_w_p = w_orig_p + gap_p + arrow_w_p + gap_p + w_sc_p
-    box_center = 800
-    start_x_p = box_center - total_w_p // 2
-
-    # Baseline al centro del box prezzi (box va da y=550 a y=730, centro=640)
-    y_baseline_p = 640
-    sc_y_p = y_baseline_p - h_sc_p // 2
-    orig_y_p = y_baseline_p - h_orig_p // 2
-
-    # Prezzo originale
-    draw.text((start_x_p, orig_y_p), orig_text, font=font_orig_p, fill=COLORS['gray'])
-    line_y_p = orig_y_p + h_orig_p // 2 + 4
-    draw.line([(start_x_p - 5, line_y_p), (start_x_p + w_orig_p + 5, line_y_p)],
-              fill=COLORS['rosso'], width=4)
-
-    # Freccia
-    ax = start_x_p + w_orig_p + gap_p
-    ay = y_baseline_p
-    draw.line([(ax, ay), (ax + arrow_w_p - 13, ay)], fill=COLORS['oro_bright'], width=5)
-    draw.polygon([(ax + arrow_w_p, ay),
-                  (ax + arrow_w_p - 15, ay - 10),
-                  (ax + arrow_w_p - 15, ay + 10)],
-                 fill=COLORS['oro_bright'])
-
-    # Prezzo scontato
-    sc_x_p = ax + arrow_w_p + gap_p
-    draw.text((sc_x_p, sc_y_p), sc_text, font=font_sc_p, fill=COLORS['oro_bright'])
-
-    # Risparmi
-    if saving > 0:
-        font_rsp = get_font(22)
-        rsp_text = "RISPARMI {}".format(fmt_price(saving))
-        draw_centered_text(draw, rsp_text, 800, 710, font_rsp, COLORS['white'])
-
-    # CTA bottone con glow
-    img = add_glow_layer(img, 540, 800, 500, 130, COLORS['oro_bright'], blur=20)
+    draw_glow_text(img, sc_text, right_x, sc_y, font_main,
+                   COLORS['gold_bright'], COLORS['gold'], glow_size=15)
     draw = ImageDraw.Draw(img)
-    draw.rectangle([560, 820, 1040, 940], fill=COLORS['oro_bright'])
-    font_cta = get_font(34)
-    draw_centered_text(draw, "LINK IN BIO", 800, 855, font_cta, COLORS['blu'])
-    font_cta2 = get_font(22, 'regular')
-    draw_centered_text(draw, "per altre offerte", 800, 905, font_cta2, COLORS['blu'])
+
+    # Risparmi piccolo
+    if data['discount_percent'] > 0:
+        saving = data['original_price'] - data['current_price']
+        font_sv = get_font(20, 'medium')
+        draw_text(draw, "Risparmi {}".format(fmt_price(saving).strip()),
+                  right_x, sc_y + 95, font_sv, COLORS['off_white'])
+
+    # ============ FOOTER ============
+    # Bottom area con CTA minimal
+    footer_y = 960
+    # Linea sopra
+    draw_horizontal_line_gradient(draw, 80, W - 80, footer_y - 10, COLORS['gold'], width=1)
+
+    # Bottone CTA minimalista
+    cta_text = "LINK IN BIO"
+    font_cta = get_font(32, 'bold')
+    draw_text(draw, cta_text, W // 2, footer_y + 5, font_cta, COLORS['gold_bright'], anchor='mt')
+
+    # Handle Telegram
+    font_handle = get_font(22, 'light')
+    draw_text(draw, "@sottocosto_oggi  ·  su Telegram", W // 2, footer_y + 50,
+              font_handle, COLORS['gray'], anchor='mt')
 
     return img
 
@@ -620,22 +733,36 @@ def generate_post(data):
 
 def generate_caption(data):
     saving = data['original_price'] - data['current_price']
-    return (
-        "🔥 OFFERTA AMAZON -{pct}%\n\n"
-        "{title}\n\n"
-        "💰 Da {orig} a {sc}\n"
-        "💸 Risparmi {sv}\n\n"
-        "⚡ Su Amazon ora!\n\n"
-        "Altre offerte come questa ogni giorno sul mio canale Telegram:\n"
-        "👉 t.me/sottocosto_oggi\n\n"
-        "#offerte #amazon #sconti #risparmio #shopping #affari #deal #sottocostoOggi #italia"
-    ).format(
-        pct=data['discount_percent'],
-        title=data['title_short'],
-        orig=fmt_price(data['original_price']),
-        sc=fmt_price(data['current_price']),
-        sv=fmt_price(saving),
-    )
+    if data['discount_percent'] > 0:
+        return (
+            "🔥 OFFERTA AMAZON -{pct}%\n\n"
+            "{title}\n\n"
+            "💰 Da {orig} a {sc}\n"
+            "💸 Risparmi {sv}\n\n"
+            "⚡ Su Amazon ora!\n\n"
+            "Altre offerte come questa ogni giorno sul mio canale Telegram:\n"
+            "👉 t.me/sottocosto_oggi\n\n"
+            "#offerte #amazon #sconti #risparmio #shopping #affari #deal #sottocostoOggi #italia"
+        ).format(
+            pct=data['discount_percent'],
+            title=data['title_short'],
+            orig=fmt_price(data['original_price']),
+            sc=fmt_price(data['current_price']),
+            sv=fmt_price(saving),
+        )
+    else:
+        return (
+            "🛒 NUOVO PRODOTTO AMAZON\n\n"
+            "{title}\n\n"
+            "💰 Solo {sc}\n\n"
+            "⚡ Disponibile su Amazon!\n\n"
+            "Altre offerte ogni giorno sul mio canale Telegram:\n"
+            "👉 t.me/sottocosto_oggi\n\n"
+            "#amazon #shopping #sottocostoOggi #italia"
+        ).format(
+            title=data['title_short'],
+            sc=fmt_price(data['current_price']),
+        )
 
 
 def image_to_bytes(img):
@@ -654,19 +781,13 @@ def handle_creator_command(api, url, partner_tag):
                                    "• https://amzn.to/CODICE\n"
                                    "• https://amzn.eu/d/CODICE")
 
-    # Log dell'ASIN estratto per debug
     print("[CREATOR] ASIN estratto: {}".format(asin), flush=True)
 
     data, err = get_product_data(api, asin, partner_tag)
     if err:
         return None, None, None, "❌ {}".format(err)
 
-    # Nota: NON blocchiamo se non c'e' sconto - il creator e' utile anche
-    # per generare grafiche di prodotti a prezzo pieno
     if data.get('discount_percent', 0) == 0:
-        # Imposto discount minimo per non avere divisioni per zero nei layout
-        data['discount_percent'] = 0
-        # Se non c'e' un prezzo originale > corrente, lo settiamo uguale
         if data.get('original_price', 0) <= data.get('current_price', 0):
             data['original_price'] = data['current_price']
 
