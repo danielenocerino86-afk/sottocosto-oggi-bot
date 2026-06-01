@@ -1,7 +1,10 @@
 """
-Modulo Creator per Sottocosto Oggi Bot v4 PREMIUM
-Design professionale con gerarchia tipografica, glow morbidi, layout pulito.
+Modulo Creator per Sottocosto Oggi Bot v4.1 PREMIUM
+Design professionale - VERSIONE: 2026-06-01-PREMIUM
 """
+
+# Tag versione visibile nei log e nelle immagini
+CREATOR_VERSION = "v4.1-PREMIUM"
 
 import os
 import re
@@ -583,6 +586,10 @@ def generate_story(data):
     draw_text(draw, "scopri tutte le offerte su Telegram", W // 2, footer_y + 38,
               font_footer_sm, COLORS['gray'], anchor='mt')
 
+    # Watermark versione (per verifica deploy)
+    font_v = get_font(10, 'light')
+    draw_text(draw, CREATOR_VERSION, W - 20, H - 20, font_v, (60, 60, 80), anchor='rt')
+
     return img
 
 
@@ -724,6 +731,10 @@ def generate_post(data):
     draw_text(draw, "@sottocosto_oggi  ·  su Telegram", W // 2, footer_y + 50,
               font_handle, COLORS['gray'], anchor='mt')
 
+    # Watermark versione (in piccolo, in basso a destra) per verifica deploy
+    font_v = get_font(10, 'light')
+    draw_text(draw, CREATOR_VERSION, W - 20, H - 20, font_v, (60, 60, 80), anchor='rt')
+
     return img
 
 
@@ -773,6 +784,8 @@ def image_to_bytes(img):
 
 
 def handle_creator_command(api, url, partner_tag):
+    print("[CREATOR] === {} ===".format(CREATOR_VERSION), flush=True)
+
     asin = extract_asin(url)
     if not asin:
         return None, None, None, ("❌ Link Amazon non valido o non risolvibile.\n\n"
