@@ -1,10 +1,14 @@
 """
-Sottocosto Oggi - Bot v27 EDITORIAL + PRIME DAY
-Novita' v27:
+Sottocosto Oggi - Bot v30 HYBRID BROWSE NODES
+Novita' v30:
+- Browse nodes Amazon Italia (24 categorie) per catturare TUTTO il catalogo
+- Keyword generiche senza brand-bias (44 keyword)
+- Keyword brand premium shufflate per varieta'
+- Fallback automatico su keyword se browse_node_id non supportato
+- Cap stretto 1 offerta/categoria per ciclo
+- Anti-ripetizione delle ultime 3 categorie
 - Palinsesto orari peak (8-9, 12-13, 20-22)
 - Countdown automatico Prime Day 23-26 giugno 2026
-- Boost pubblicazioni in fasce alto engagement
-- Trigger endpoint /healthcheck per cron-job.org
 """
 
 import os
@@ -20,7 +24,7 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v28-RANDOMIZED-CATEGORIES"
+BOT_VERSION = "v30-HYBRID-BROWSE-NODES"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -181,6 +185,111 @@ EVENING_KEYWORDS = [
 ]
 
 # ============================================================
+# BROWSE NODES AMAZON ITALIA (cattura TUTTO il catalogo per categoria)
+# Questi ID sono stabili nel tempo per le categorie principali
+# ============================================================
+
+AMAZON_IT_BROWSE_NODES = {
+    # Casa, cucina, arredo
+    "Casa e cucina":           "524015031",
+    "Elettrodomestici":        "412606031",
+    "Bricolage e Fai da te":   "524012031",
+    "Giardino e giardinaggio": "524013031",
+    "Illuminazione":           "3155356031",
+
+    # Moda e accessori
+    "Moda":                    "524017031",
+    "Scarpe":                  "8463981031",
+    "Borse, scarpe":           "8463981031",
+    "Gioielli":                "1571265031",
+    "Orologi":                 "524023031",
+
+    # Sport e tempo libero
+    "Sport e tempo libero":    "524014031",
+
+    # Bellezza e cura personale
+    "Bellezza":                "11962031",
+    "Salute e cura della persona": "524027031",
+
+    # Elettronica (priorita' MENO alta visto che ne abbiamo tanta gia')
+    "Elettronica":             "412609031",
+    "Informatica":             "412610031",
+    "Videogiochi":             "412603031",
+
+    # Bambini e neonati
+    "Prima infanzia":          "1571278031",
+    "Giochi e giocattoli":     "412607031",
+
+    # Animali, libri, cibo
+    "Prodotti per animali":    "8606827031",
+    "Libri":                   "411663031",
+    "Alimentari e cura della casa": "5866074031",
+
+    # Auto e moto
+    "Auto e moto":             "524011031",
+
+    # Cancelleria e ufficio
+    "Cancelleria e ufficio":   "412602031",
+
+    # Strumenti musicali
+    "Strumenti musicali":      "412605031",
+}
+
+# Search Index Amazon (macro-categorie)
+AMAZON_SEARCH_INDEXES = [
+    "HomeAndKitchen",      # casa cucina
+    "Fashion",              # moda
+    "FashionWomen",         # moda donna
+    "FashionMen",           # moda uomo
+    "SportsAndOutdoors",    # sport
+    "Beauty",               # bellezza
+    "HealthPersonalCare",   # salute
+    "Garden",               # giardinaggio
+    "Toys",                 # giocattoli
+    "PetSupplies",          # animali
+    "Books",                # libri
+    "Automotive",           # auto
+    "Tools",                # fai-da-te
+    "OfficeProducts",       # ufficio
+    "GroceryAndGourmetFood", # alimentari
+    "Appliances",           # elettrodomestici
+]
+
+# Keyword GENERICHE che catturano molti prodotti senza brand-bias
+GENERIC_KEYWORDS = [
+    # Casa cucina
+    "set pentole acciaio", "tappeto cucina antiscivolo", "tovaglia rettangolare",
+    "lenzuola matrimoniali", "asciugamani spugna", "tende camera letto",
+    "vasi piante interno", "portacandele design",
+
+    # Moda generico
+    "scarpe donna eleganti", "scarpe uomo casual", "borsa lavoro donna",
+    "zaino scuola", "occhiali da sole donna", "occhiali sole uomo",
+    "cappello estivo", "costume mare donna", "costume mare uomo",
+
+    # Sport
+    "tappetino yoga", "manubri palestra", "fascia elastica fitness",
+    "borraccia termica", "scarpe trekking", "zaino escursionismo",
+    "racchetta tennis", "pallone calcio",
+
+    # Bellezza
+    "crema solare viso", "siero vitamina c", "balsamo labbra",
+    "trousse beauty case", "set pennelli trucco", "smalto unghie",
+
+    # Bambini giochi
+    "puzzle 1000 pezzi", "gioco da tavolo strategia",
+    "passeggino leggero", "biberon neonato",
+
+    # Animali
+    "crocchette cane premium", "tiragraffi gatto",
+    "collare cane", "lettiera gatto",
+
+    # Libri/cancelleria/casa
+    "agenda 2026", "quaderno spirale", "penne stilografiche",
+    "stampante multifunzione", "scaffale libreria",
+]
+
+# ============================================================
 # BLACKLIST
 # ============================================================
 
@@ -302,15 +411,50 @@ def create_api():
     )
 
 
-def search_deals(api, keyword, max_results=10):
+def search_deals(api, keyword=None, browse_node_id=None, search_index=None, max_results=10):
+    """Cerca offerte usando una delle 3 strategie:
+    - keyword: search testuale (es. 'iPhone offerta')
+    - browse_node_id: ricerca per categoria Amazon (es. '524015031' = Casa e cucina)
+    - search_index: ricerca in macro categoria (es. 'HomeAndKitchen', 'Fashion')
+    Almeno uno tra keyword/browse_node_id deve essere specificato.
+    """
     try:
-        results = api.search_items(
-            keywords=keyword, item_count=max_results,
-            condition=Condition.NEW,
-            min_saving_percent=MIN_DISCOUNT_PERCENT,
-        )
+        kwargs = {
+            'item_count': max_results,
+            'condition': Condition.NEW,
+            'min_saving_percent': MIN_DISCOUNT_PERCENT,
+        }
+        if keyword:
+            kwargs['keywords'] = keyword
+        if browse_node_id:
+            kwargs['browse_node_id'] = browse_node_id
+        if search_index:
+            kwargs['search_index'] = search_index
+
+        # Se solo browse_node_id senza keyword, forziamo una keyword generica
+        # (l'API spesso richiede almeno una keyword)
+        if browse_node_id and not keyword:
+            kwargs['keywords'] = "offerta"
+
+        results = api.search_items(**kwargs)
+    except TypeError as e:
+        # Se il parametro non esiste in questa versione, fallback su keyword
+        log("  [API_PARAM_ERR] {} - fallback keyword".format(str(e)[:60]))
+        if keyword:
+            try:
+                results = api.search_items(
+                    keywords=keyword, item_count=max_results,
+                    condition=Condition.NEW,
+                    min_saving_percent=MIN_DISCOUNT_PERCENT,
+                )
+            except Exception as e2:
+                log("  [API_ERR] fallback failed: {}".format(str(e2)[:80]))
+                return []
+        else:
+            return []
     except Exception as e:
-        log("  [API_ERR] {}: {}".format(keyword, str(e)[:80]))
+        identifier = keyword or browse_node_id or search_index
+        log("  [API_ERR] {}: {}".format(identifier, str(e)[:80]))
         return []
     if not results or not results.items:
         return []
@@ -975,7 +1119,7 @@ def main():
         for kw in keywords:
             if len(all_deals) >= MAX_DEALS_POOL:
                 break
-            deals_found = search_deals(api, kw)
+            deals_found = search_deals(api, keyword=kw)
             new_count = 0
             for d in deals_found:
                 if d["asin"] in seen:
@@ -989,12 +1133,35 @@ def main():
             if new_count > 0:
                 log("  [{}] -> {}".format(kw[:35], new_count))
 
+    def search_browse_nodes_phase(name, nodes_dict):
+        """Cerca per browse_node_id. Restituisce TUTTO il catalogo di una categoria."""
+        log("=== FASE {}: {} browse nodes ===".format(name, len(nodes_dict)))
+        # Shuffla l'ordine delle categorie per varieta'
+        items = list(nodes_dict.items())
+        random.shuffle(items)
+        for cat_name, node_id in items:
+            if len(all_deals) >= MAX_DEALS_POOL:
+                break
+            deals_found = search_deals(api, browse_node_id=node_id, max_results=10)
+            new_count = 0
+            for d in deals_found:
+                if d["asin"] in seen:
+                    continue
+                if len(all_deals) >= MAX_DEALS_POOL:
+                    break
+                seen.add(d["asin"])
+                d["_kw"] = "BROWSE:{}".format(cat_name)
+                all_deals.append(d)
+                new_count += 1
+            if new_count > 0:
+                log("  [BROWSE: {}] -> {}".format(cat_name[:30], new_count))
+
     # FASE 1: Deal attivi
     log("=== FASE 1: Deal Amazon attivi ===")
     for kw in DEAL_KEYWORDS:
         if len(all_deals) >= MAX_DEALS_POOL:
             break
-        deals_found = search_deals(api, kw)
+        deals_found = search_deals(api, keyword=kw)
         new_count = 0
         for d in deals_found:
             if d["asin"] in seen:
@@ -1010,23 +1177,52 @@ def main():
             log("  [DEAL: {}] -> {}".format(kw, new_count))
     log("[POOL] Dopo F1: {}".format(len(all_deals)))
 
-    search_phase("2 CASA/CUCINA", HOUSE_KITCHEN_KEYWORDS)
+    # ===========================================
+    # FASE 2: BROWSE NODES - cattura TUTTO il catalogo per categoria
+    # Questa e' la fase chiave: pesca da TUTTE le categorie senza keyword bias
+    # ===========================================
+    search_browse_nodes_phase("2 BROWSE NODES (catalogo per categoria)", AMAZON_IT_BROWSE_NODES)
+    log("[POOL] Dopo F2 (browse): {}".format(len(all_deals)))
+
+    # ===========================================
+    # FASE 3: KEYWORD GENERICHE - prodotti senza brand-bias
+    # ===========================================
+    search_phase("3 GENERIC (prodotti senza brand bias)", GENERIC_KEYWORDS)
+    log("[POOL] Dopo F3 (generic): {}".format(len(all_deals)))
+
+    # ===========================================
+    # FASE 4-8: KEYWORD BRAND TOP (qualita' premium, manteniamo per garantire brand riconosciuti)
+    # Le carichiamo SHUFFLATE per varieta'
+    # ===========================================
+    house_shuffled = list(HOUSE_KITCHEN_KEYWORDS)
+    random.shuffle(house_shuffled)
+    search_phase("4 CASA/CUCINA premium", house_shuffled)
     log("[POOL] {}".format(len(all_deals)))
 
-    search_phase("3 MODA", FASHION_KEYWORDS)
+    fashion_shuffled = list(FASHION_KEYWORDS)
+    random.shuffle(fashion_shuffled)
+    search_phase("5 MODA premium", fashion_shuffled)
     log("[POOL] {}".format(len(all_deals)))
 
-    search_phase("4 SPORT", SPORT_KEYWORDS)
+    sport_shuffled = list(SPORT_KEYWORDS)
+    random.shuffle(sport_shuffled)
+    search_phase("6 SPORT premium", sport_shuffled)
     log("[POOL] {}".format(len(all_deals)))
 
-    search_phase("5 BELLEZZA", BEAUTY_KEYWORDS)
+    beauty_shuffled = list(BEAUTY_KEYWORDS)
+    random.shuffle(beauty_shuffled)
+    search_phase("7 BELLEZZA premium", beauty_shuffled)
     log("[POOL] {}".format(len(all_deals)))
 
-    search_phase("6 ELETTRONICA", TECH_KEYWORDS)
-    log("[POOL] {}".format(len(all_deals)))
+    # Tech LAST (gia' ne abbiamo tanta nelle browse nodes)
+    if len(all_deals) < MAX_DEALS_POOL // 2:
+        tech_shuffled = list(TECH_KEYWORDS)
+        random.shuffle(tech_shuffled)
+        search_phase("8 ELETTRONICA premium", tech_shuffled[:15])  # solo 15, no overload tech
+        log("[POOL] {}".format(len(all_deals)))
 
     if hour >= 19 and len(all_deals) < max_posts_cycle * 4:
-        search_phase("7 EVENING", EVENING_KEYWORDS)
+        search_phase("9 EVENING", EVENING_KEYWORDS)
 
     log("=" * 60)
     log("[POOL FINALE] {} candidati | max post ciclo: {}".format(len(all_deals), max_posts_cycle))
@@ -1038,6 +1234,7 @@ def main():
     # ORDINAMENTO RANDOMIZZATO:
     # 1. Shuffla entro tier di priorita' (tier1 sopra, ma randomizzati)
     # 2. Diversifica round-robin tra categorie con shuffle ogni giro
+    # 3. CAP per categoria: max 2 offerte stessa categoria per ciclo
     all_deals = shuffle_within_priority(all_deals)
 
     log("[TOP 5] (dopo shuffle nei tier):")
@@ -1047,6 +1244,14 @@ def main():
         bp = ["TOP", "GOOD", "?"][d.get('brand_prio', 2)]
         log("  {}. s={} {} {} -{}% | {}".format(
             i+1, score, cat[:8], bp, d["discount_percent"], d["title"][:40]))
+
+    # Conta offerte per categoria
+    cat_counts_pool = {}
+    for d in all_deals:
+        c = get_deal_category(d["title"])
+        cat_counts_pool[c] = cat_counts_pool.get(c, 0) + 1
+    log("[POOL CATEGORIE]: {}".format(
+        ", ".join(["{}={}".format(k, v) for k, v in sorted(cat_counts_pool.items(), key=lambda x: -x[1])[:8]])))
 
     # Round-robin tra categorie con randomizzazione
     all_deals = diversify_deals(all_deals)
@@ -1070,9 +1275,26 @@ def main():
             log("[OK] Top pubblicato!")
             time.sleep(POST_INTERVAL_SECONDS)
 
-    # ===== PUBBLICAZIONI =====
+    # CAP per categoria: max 1 stessa categoria nel ciclo corrente
+    # + Anti-ripetizione: skip se le ultime 3 offerte pubblicate oggi erano della stessa categoria
     pub = 0
-    log("[PUBLISH] max {} per ciclo (peak hour={})".format(max_posts_cycle, hour))
+    cat_count_cycle = {}  # categoria -> quante volte pubblicata in questo ciclo
+    MAX_PER_CAT_CYCLE = 1  # massimo 1 offerta stessa categoria per ciclo
+    skipped_for_cat = []
+
+    # Recupera le ultime 3 categorie pubblicate oggi (dalle stats)
+    recent_categories = []
+    try:
+        today_stats = load_stats().get(today, [])
+        for d in today_stats[-3:]:
+            recent_categories.append(get_deal_category(d["title"]))
+        log("[ULTIME 3 CATEGORIE PUBBLICATE OGGI]: {}".format(recent_categories))
+    except Exception:
+        pass
+
+    log("[PUBLISH] max {} per ciclo (peak hour={}) | max {} per categoria".format(
+        max_posts_cycle, hour, MAX_PER_CAT_CYCLE))
+
     for d in all_deals:
         if pub >= max_posts_cycle:
             log("[STOP] Limite ciclo: {}".format(pub))
@@ -1081,9 +1303,31 @@ def main():
             break
         if is_posted(posted, d["asin"]):
             continue
+
+        cat = get_deal_category(d["title"])
+
+        # CAP per categoria in QUESTO ciclo
+        if cat_count_cycle.get(cat, 0) >= MAX_PER_CAT_CYCLE:
+            skipped_for_cat.append((cat, d["title"][:30]))
+            continue
+
+        # ANTI-RIPETIZIONE: skip se le ultime 3 erano della stessa categoria
+        # (e ho ancora altre categorie da provare nel pool)
+        if recent_categories.count(cat) >= 2:
+            # Verifica se ci sono altre categorie disponibili nel resto del pool
+            remaining_cats = set()
+            for other in all_deals:
+                if not is_posted(posted, other["asin"]) and cat_count_cycle.get(get_deal_category(other["title"]), 0) == 0:
+                    other_cat = get_deal_category(other["title"])
+                    if other_cat != cat:
+                        remaining_cats.add(other_cat)
+            if remaining_cats:
+                log("[SKIP-REPEAT] {} (ultime 3 erano: {})".format(cat, recent_categories))
+                skipped_for_cat.append((cat, d["title"][:30]))
+                continue
+
         dn = count_deals(posted) + 1
         sp = "flash" if d.get("has_deal") or d["discount_percent"] >= FLASH_DEAL_PERCENT else None
-        cat = get_deal_category(d["title"])
         log("[PUB #{}] {} -{}% | {}".format(dn, cat, d["discount_percent"], d["title"][:40]))
         ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
         if ok:
@@ -1091,10 +1335,17 @@ def main():
             save_posted(posted)
             save_deal_stat(d)
             pub += 1
+            cat_count_cycle[cat] = cat_count_cycle.get(cat, 0) + 1
+            recent_categories.append(cat)
+            if len(recent_categories) > 3:
+                recent_categories.pop(0)
             log("  [OK]")
             time.sleep(POST_INTERVAL_SECONDS)
         else:
             log("  [FAIL]")
+
+    if skipped_for_cat:
+        log("[SKIPPED per cap categoria]: {}".format(len(skipped_for_cat)))
 
     log("=" * 60)
     log("[RIEPILOGO] Pubblicate {} | Totale oggi: {}".format(pub, count_deals(posted)))
