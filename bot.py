@@ -1,15 +1,15 @@
 """
-Sottocosto Oggi - Bot v32 OPTIMIZED
-Novita' v32 (basato sui dati reali del run v31):
-- Pool ridotto a 100 (era 200): fasi 5-7 (Moda/Sport/Bellezza premium) finalmente eseguite
-- Intervallo post 60s (era 90s): copre intero ciclo cron-job da 10 min
-- Peak hours 7 post/ciclo, normal 5, low 3 (opzione C bilanciata = ~180 post/giorno)
-- Cap 15 offerte/categoria nel POOL: evita squilibri (era casaarredo=42 vs cucina=9)
-- Classificatore espanso 10x: riduce 'altro' dal 50% al 5-10%
-- 27 categorie con emoji+hashtag dedicati (era 22)
-- 22 browse nodes Amazon Italia (10 shufflati per ciclo)
-- Keyword generiche, premium e brand top
-- Anti-ripetizione delle ultime 3 categorie pubblicate
+Sottocosto Oggi - Bot v33 BOOST DINAMICO
+Novita' v33 (basato sui dati del run v32):
+- Pool 130 (era 100): brand premium FINALMENTE eseguiti
+- Intervallo post 50s (era 60s): copre 9-10 min/ciclo
+- Peak/Normal/Low: 8/6/4 base + fino a 3 WOW extra
+- BOOST WOW: offerte sconto >=50% OPPURE brand TOP >=30% bypass del limite normale
+- Volume target: ~210-230 post/giorno (era 180)
+- Cap categoria nel pool a 18 (era 15)
+- Brand premium PRIMA delle generic (KitchenAid, Tommy, Nike, L'Oreal pescati per primi)
+- Lookup brand -> categoria (Vans -> scarpe, Tommy -> abbigliamento)
+- Anti-ripetizione delle ultime 3 categorie
 - Throttling 2.5s (no rate limit errors)
 - Countdown automatico Prime Day 23-26 giugno 2026
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v32-OPTIMIZED"
+BOT_VERSION = "v33-BOOST-DINAMICO"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -35,17 +35,20 @@ AMAZON_CREDENTIAL_ID = os.environ.get("AMAZON_CREDENTIAL_ID", "")
 AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
-# ========== CONFIG OPZIONE C - ritmo medio bilanciato ==========
+# ========== CONFIG v33 - BOOST DINAMICO ==========
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "10"))
 FLASH_DEAL_PERCENT = 50
 MIN_PRICE = 9.0
 MIN_RATING = 3.5
 MIN_REVIEWS = 25
 NO_RATING_MIN_PRICE = 20.0
-MAX_DEALS_POOL = 100         # ridotto da 200 a 100 per esecuzione fasi 5-7
-POST_INTERVAL_SECONDS = 60   # ridotto da 90 a 60 per coprire l'ora con piu' post
+MAX_DEALS_POOL = 130         # 130 (era 100) - lascia spazio anche per brand premium
+POST_INTERVAL_SECONDS = 50   # 50s (era 60s) - copre piu' tempo per ciclo
 MAX_MEMORY_SIZE = 500
-MAX_PER_CATEGORY_POOL = 15   # cap offerte stessa categoria nel pool (evita squilibri)
+MAX_PER_CATEGORY_POOL = 18   # 18 (era 15) - piu' offerte per categoria
+WOW_DISCOUNT_THRESHOLD = 50  # sconto >= 50% = offerta WOW
+WOW_TOP_BRAND_DISCOUNT = 30  # se brand TOP + sconto >= 30% = WOW
+WOW_BOOST_PER_CYCLE = 3      # massimo 3 offerte WOW extra per ciclo
 
 # Orari di pubblicazione: 7-23 IT
 PUBLISH_START_HOUR = 7
@@ -69,25 +72,45 @@ def log(msg):
 # ============================================================
 
 def get_peak_multiplier(hour):
-    """OPZIONE C - bilanciato.
-    Tempo medio post: 60s, ciclo cron-job 10 min.
+    """v33 OPZIONE B - BOOST DINAMICO.
+    Tempo medio post: 50s, ciclo cron-job 10 min.
 
-    Peak hours (8-9, 12-13, 20-22 IT): 7 post per ciclo = ~7 min coperti = ~42 post/ora
-    Normal hours (10-11, 14-15, 17-19): 5 post = ~5 min coperti = ~30 post/ora
-    Low hours (7, 16, 23): 3 post = ~3 min coperti = ~18 post/ora
+    Peak (8-9, 12-13, 20-22 IT): 8 base + fino a 3 WOW = max 11 post = 9 min coperti
+    Normal (10-11, 14-15, 17-19): 6 base + fino a 3 WOW = max 9 post
+    Low (7, 16, 23): 4 base + fino a 2 WOW = max 6 post
 
-    Volume giornaliero atteso:
-    - 7-9 IT (peak + low): ~80 post
-    - 10-13 IT (mix): ~110 post
-    - 14-22 IT (normal + peak): ~250 post
-    - 23 IT (low): ~18 post
-    Totale: ~150-200 post/giorno (target medio richiesto)
+    Volume giornaliero atteso: ~210-230 post/giorno
     """
     if hour in (8, 9, 12, 13, 20, 21, 22):
-        return 7  # peak
+        return 8  # peak
     if hour in (10, 11, 14, 15, 17, 18, 19):
-        return 5  # normal
-    return 3  # low (7, 16, 23)
+        return 6  # normal
+    return 4  # low (7, 16, 23)
+
+
+def get_wow_boost(hour):
+    """Quante offerte WOW extra puo' pubblicare oltre il limite normale."""
+    if hour in (8, 9, 12, 13, 20, 21, 22):
+        return 3  # peak: fino a +3 extra
+    if hour in (10, 11, 14, 15, 17, 18, 19):
+        return 3  # normal: fino a +3 extra
+    return 2  # low: max +2 extra
+
+
+def is_wow_deal(deal):
+    """Identifica un'offerta WOW che merita boost di pubblicazione.
+    Criteri:
+    - Sconto >= 50% (offerte LAMPO)
+    - OPPURE brand TOP con sconto >= 30%
+    """
+    pct = deal.get('discount_percent', 0)
+    if pct >= WOW_DISCOUNT_THRESHOLD:
+        return True
+    if deal.get('brand_prio', 2) == 0 and pct >= WOW_TOP_BRAND_DISCOUNT:
+        return True
+    if deal.get('_is_active_deal'):  # Lightning Deal Amazon
+        return True
+    return False
 
 
 # ============================================================
@@ -426,6 +449,236 @@ def brand_priority(title):
         if brand.lower() in t:
             return 1
     return 2
+
+
+# ============================================================
+# LOOKUP BRAND -> CATEGORIA (fallback per titoli ambigui)
+# Esempio: "Vans Old Skool Rucksack" -> brand Vans = scarpe
+#          "Tommy Hilfiger Pantaloncino" -> Tommy = abbigliamento
+# ============================================================
+BRAND_CATEGORY_LOOKUP = {
+    # Scarpe sportive / casual
+    "vans": "scarpe",
+    "converse": "scarpe",
+    "timberland": "scarpe",
+    "doc martens": "scarpe",
+    "dr. martens": "scarpe",
+    "clarks": "scarpe",
+    "geox": "scarpe",
+    "crocs": "scarpe",
+    "ugg": "scarpe",
+    "birkenstock": "scarpe",
+    "salomon": "scarpe",
+    "asics": "scarpe",
+    "brooks": "scarpe",
+    "skechers": "scarpe",
+    "diadora": "scarpe",
+
+    # Abbigliamento brand
+    "tommy hilfiger": "abbigliamento",
+    "calvin klein": "abbigliamento",
+    "ralph lauren": "abbigliamento",
+    "polo ralph": "abbigliamento",
+    "lacoste": "abbigliamento",
+    "levi's": "abbigliamento",
+    "levi ": "abbigliamento",
+    "diesel": "abbigliamento",
+    "hugo boss": "abbigliamento",
+    "armani": "abbigliamento",
+    "fred perry": "abbigliamento",
+    "the north face": "abbigliamento",
+    "patagonia": "abbigliamento",
+    "columbia": "abbigliamento",
+    "pinko": "abbigliamento",
+    "liu jo": "abbigliamento",
+    "guess uomo": "abbigliamento",
+    "guess donna": "abbigliamento",
+    "elisabetta franchi": "abbigliamento",
+
+    # Borse / valigeria
+    "michael kors": "borse",
+    "furla": "borse",
+    "coccinelle": "borse",
+    "kipling": "borse",
+    "samsonite": "borse",
+    "american tourister": "borse",
+    "eastpak": "borse",
+    "roncato": "borse",
+    "delsey": "borse",
+
+    # Gioielli / orologi
+    "pandora": "gioielli",
+    "swarovski": "gioielli",
+    "stroili": "gioielli",
+    "fossil": "wearable",
+    "cluse": "wearable",
+    "casio": "wearable",
+    "skagen": "wearable",
+    "garmin": "wearable",
+    "fitbit": "wearable",
+    "amazfit": "wearable",
+    "polar watch": "wearable",
+    "huawei watch": "wearable",
+
+    # Bellezza / profumi
+    "kerastase": "bellezza",
+    "loreal": "bellezza",
+    "l'oreal": "bellezza",
+    "olaplex": "bellezza",
+    "garnier": "bellezza",
+    "nivea": "bellezza",
+    "estée lauder": "bellezza",
+    "estee lauder": "bellezza",
+    "lancôme": "bellezza",
+    "lancome": "bellezza",
+    "clinique": "bellezza",
+    "biotherm": "bellezza",
+    "vichy": "bellezza",
+    "bioderma": "bellezza",
+    "la roche posay": "bellezza",
+    "maybelline": "bellezza",
+    "nyx": "bellezza",
+    "chanel": "bellezza",
+    "dior": "bellezza",
+    "mugler": "bellezza",
+    "yves saint laurent": "bellezza",
+    "versace profum": "bellezza",
+    "calvin klein profum": "bellezza",
+    "hugo boss profum": "bellezza",
+    "ghd ": "curapersona",
+    "babyliss": "curapersona",
+    "remington": "curapersona",
+    "philips sonicare": "curapersona",
+    "oral-b": "curapersona",
+    "oral b": "curapersona",
+
+    # Cucina / casa
+    "kitchenaid": "cucina",
+    "de'longhi": "cucina",
+    "delonghi": "cucina",
+    "nespresso": "cucina",
+    "tefal": "cucina",
+    "le creuset": "cucina",
+    "wmf": "cucina",
+    "lagostina": "cucina",
+    "russell hobbs": "cucina",
+    "moulinex": "cucina",
+    "kenwood": "cucina",
+    "ninja foodi": "cucina",
+    "ninja friggit": "cucina",
+    "bialetti": "cucina",
+    "smeg": "cucina",
+    "krups": "cucina",
+
+    # Casa/arredo brand
+    "dyson": "casaarredo",
+    "shark ": "casaarredo",
+    "roborock": "casaarredo",
+    "roomba": "casaarredo",
+    "irobot": "casaarredo",
+    "dreame": "casaarredo",
+    "ecovacs": "casaarredo",
+    "kärcher": "casaarredo",
+    "karcher": "casaarredo",
+    "rowenta": "casaarredo",
+    "philips hue": "casaarredo",
+    "yankee candle": "casaarredo",
+    "emma materasso": "casaarredo",
+    "tempur": "casaarredo",
+
+    # Fai da te
+    "bosch ": "faidate",
+    "makita": "faidate",
+    "dewalt": "faidate",
+    "ryobi": "faidate",
+    "einhell": "faidate",
+    "stanley ": "faidate",
+    "black & decker": "faidate",
+    "black+decker": "faidate",
+
+    # Sport
+    "nike ": "sport",
+    "adidas ": "sport",
+    "puma ": "sport",
+    "new balance": "sport",
+    "under armour": "sport",
+    "theragun": "sport",
+
+    # Audio / cuffie
+    "sony cuffi": "audio",
+    "bose cuffi": "audio",
+    "jbl ": "audio",
+    "sennheiser": "audio",
+    "airpods": "audio",
+    "beats ": "audio",
+    "marshall ": "audio",
+    "skullcandy": "audio",
+    "edifier": "audio",
+    "anker soundcore": "audio",
+
+    # Bambini / giocattoli
+    "lego": "bambini",
+    "playmobil": "bambini",
+    "barbie": "bambini",
+    "fisher price": "bambini",
+    "fisher-price": "bambini",
+    "chicco": "bambini",
+    "philips avent": "bambini",
+    "cybex": "bambini",
+    "maxi cosi": "bambini",
+    "inglesina": "bambini",
+    "ravensburger": "bambini",
+    "clementoni": "bambini",
+
+    # Animali
+    "royal canin": "animali",
+    "hill's": "animali",
+    "purina": "animali",
+    "monge ": "animali",
+    "schesir": "animali",
+    "almo nature": "animali",
+
+    # Foto / video
+    "gopro": "foto",
+    "dji ": "foto",
+    "insta360": "foto",
+    "canon eos": "foto",
+    "sony alpha": "foto",
+    "nikon ": "foto",
+
+    # Gaming
+    "playstation": "gaming",
+    "nintendo switch": "gaming",
+    "xbox ": "gaming",
+    "razer ": "gaming",
+    "steelseries": "gaming",
+    "hyperx": "gaming",
+    "elgato ": "gaming",
+
+    # Smart home
+    "echo dot": "smarthome",
+    "echo show": "smarthome",
+    "google nest": "smarthome",
+    "ring videoc": "smarthome",
+    "tp-link tapo": "smarthome",
+    "fire tv stick": "tv",
+
+    # Auto
+    "michelin pneum": "auto",
+    "nextbase": "auto",
+}
+
+
+def brand_to_category(title):
+    """Cerca il brand nel titolo e ritorna la categoria associata.
+    Ritorna None se nessun brand match."""
+    t = title.lower()
+    # Cerca brand piu' lungo prima (es. "tp-link tapo" prima di "tapo")
+    sorted_brands = sorted(BRAND_CATEGORY_LOOKUP.keys(), key=len, reverse=True)
+    for brand in sorted_brands:
+        if brand in t:
+            return BRAND_CATEGORY_LOOKUP[brand]
+    return None
 
 
 def create_api():
@@ -929,6 +1182,13 @@ def get_deal_category(title):
         "ricetrasmittente", "walkie talkie",
         "telecomando universal",
     ]): return "accessori"
+
+    # ===== FALLBACK BRAND LOOKUP =====
+    # Se le keyword non hanno matchato, prova a classificare dal brand
+    # Esempio: "Vans Old Skool Rucksack" -> Vans = scarpe (anche se rucksack non c'e' in nessuna keyword sopra)
+    brand_cat = brand_to_category(title)
+    if brand_cat:
+        return brand_cat
 
     return "altro"
 
@@ -1607,50 +1867,62 @@ def main():
     log("[POOL] Dopo F1: {}".format(len(all_deals)))
 
     # ===========================================
-    # FASE 2: BROWSE NODES - cattura TUTTO il catalogo per categoria
-    # Limitato a 10 nodi shufflati per ciclo (evita rate limit)
     # ===========================================
-    search_browse_nodes_phase("2 BROWSE NODES (catalogo per categoria)",
-                              AMAZON_IT_BROWSE_NODES, max_nodes_per_cycle=10)
-    log("[POOL] Dopo F2 (browse): {}".format(len(all_deals)))
-
-    # ===========================================
-    # FASE 3: KEYWORD GENERICHE - prodotti senza brand-bias
-    # ===========================================
-    search_phase("3 GENERIC (prodotti senza brand bias)", GENERIC_KEYWORDS)
-    log("[POOL] Dopo F3 (generic): {}".format(len(all_deals)))
-
-    # ===========================================
-    # FASE 4-8: KEYWORD BRAND TOP (qualita' premium, manteniamo per garantire brand riconosciuti)
-    # Le carichiamo SHUFFLATE per varieta'
+    # FASE 2-5: BRAND PREMIUM (prima di tutto, per pescare i top brand)
+    # Cosi i brand TOP (KitchenAid, Tommy, Nike, L'Oreal...) sono SEMPRE nel pool
     # ===========================================
     house_shuffled = list(HOUSE_KITCHEN_KEYWORDS)
     random.shuffle(house_shuffled)
-    search_phase("4 CASA/CUCINA premium", house_shuffled)
-    log("[POOL] {}".format(len(all_deals)))
+    # Limita a 10 keyword per fase (evita di saturare il pool con una sola categoria)
+    search_phase("2 CASA/CUCINA brand premium", house_shuffled[:10])
+    log("[POOL] Dopo F2: {}".format(len(all_deals)))
 
     fashion_shuffled = list(FASHION_KEYWORDS)
     random.shuffle(fashion_shuffled)
-    search_phase("5 MODA premium", fashion_shuffled)
-    log("[POOL] {}".format(len(all_deals)))
+    search_phase("3 MODA brand premium", fashion_shuffled[:10])
+    log("[POOL] Dopo F3: {}".format(len(all_deals)))
 
     sport_shuffled = list(SPORT_KEYWORDS)
     random.shuffle(sport_shuffled)
-    search_phase("6 SPORT premium", sport_shuffled)
-    log("[POOL] {}".format(len(all_deals)))
+    search_phase("4 SPORT brand premium", sport_shuffled[:8])
+    log("[POOL] Dopo F4: {}".format(len(all_deals)))
 
     beauty_shuffled = list(BEAUTY_KEYWORDS)
     random.shuffle(beauty_shuffled)
-    search_phase("7 BELLEZZA premium", beauty_shuffled)
-    log("[POOL] {}".format(len(all_deals)))
+    search_phase("5 BELLEZZA brand premium", beauty_shuffled[:10])
+    log("[POOL] Dopo F5: {}".format(len(all_deals)))
 
-    # Tech LAST (gia' ne abbiamo tanta nelle browse nodes)
-    if len(all_deals) < MAX_DEALS_POOL // 2:
+    # ===========================================
+    # FASE 6: BROWSE NODES - cattura il catalogo per categoria
+    # Limitato a 10 nodi shufflati per ciclo (evita rate limit)
+    # ===========================================
+    search_browse_nodes_phase("6 BROWSE NODES (catalogo per categoria)",
+                              AMAZON_IT_BROWSE_NODES, max_nodes_per_cycle=10)
+    log("[POOL] Dopo F6 (browse): {}".format(len(all_deals)))
+
+    # ===========================================
+    # FASE 7: KEYWORD GENERICHE - prodotti senza brand-bias
+    # Solo se il pool ha ancora spazio
+    # ===========================================
+    if len(all_deals) < MAX_DEALS_POOL:
+        # Shuffla le generiche e prendi le prime 20 per non saturare
+        generic_shuffled = list(GENERIC_KEYWORDS)
+        random.shuffle(generic_shuffled)
+        search_phase("7 GENERIC (prodotti senza brand bias)", generic_shuffled[:20])
+        log("[POOL] Dopo F7 (generic): {}".format(len(all_deals)))
+
+    # ===========================================
+    # FASE 8: ELETTRONICA premium (in coda, ne abbiamo gia' tanta nelle browse)
+    # ===========================================
+    if len(all_deals) < MAX_DEALS_POOL:
         tech_shuffled = list(TECH_KEYWORDS)
         random.shuffle(tech_shuffled)
-        search_phase("8 ELETTRONICA premium", tech_shuffled[:15])  # solo 15, no overload tech
-        log("[POOL] {}".format(len(all_deals)))
+        search_phase("8 ELETTRONICA premium", tech_shuffled[:10])
+        log("[POOL] Dopo F8: {}".format(len(all_deals)))
 
+    # ===========================================
+    # FASE 9: EVENING - se sera e pool basso
+    # ===========================================
     if hour >= 19 and len(all_deals) < max_posts_cycle * 4:
         search_phase("9 EVENING", EVENING_KEYWORDS)
 
@@ -1705,14 +1977,20 @@ def main():
             log("[OK] Top pubblicato!")
             time.sleep(POST_INTERVAL_SECONDS)
 
-    # CAP per categoria: max 1 stessa categoria nel ciclo corrente
-    # + Anti-ripetizione: skip se le ultime 3 offerte pubblicate oggi erano della stessa categoria
+    # ===== PUBBLICAZIONE CON BOOST WOW =====
+    # Logica v33:
+    # - Base: max N post per ciclo (peak=8, normal=6, low=4)
+    # - Boost: fino a +3 post EXTRA se sono offerte WOW (>=50% sconto o brand TOP >=30%)
+    # - Max assoluto: base + boost (peak=11, normal=9, low=6)
     pub = 0
-    cat_count_cycle = {}  # categoria -> quante volte pubblicata in questo ciclo
-    MAX_PER_CAT_CYCLE = 1  # massimo 1 offerta stessa categoria per ciclo
+    wow_pub = 0  # contatore offerte WOW gia' pubblicate (per limite boost)
+    cat_count_cycle = {}
+    MAX_PER_CAT_CYCLE = 1  # max 1 offerta stessa categoria per ciclo (per non spammare)
+    wow_boost_max = get_wow_boost(hour)
     skipped_for_cat = []
+    skipped_for_repeat = []
 
-    # Recupera le ultime 3 categorie pubblicate oggi (dalle stats)
+    # Recupera le ultime 3 categorie pubblicate oggi
     recent_categories = []
     try:
         today_stats = load_stats().get(today, [])
@@ -1722,29 +2000,45 @@ def main():
     except Exception:
         pass
 
-    log("[PUBLISH] max {} per ciclo (peak hour={}) | max {} per categoria".format(
-        max_posts_cycle, hour, MAX_PER_CAT_CYCLE))
+    log("[PUBLISH] base={} | wow_boost_max={} | totale max={} (peak hour={})".format(
+        max_posts_cycle, wow_boost_max, max_posts_cycle + wow_boost_max, hour))
 
     for d in all_deals:
-        if pub >= max_posts_cycle:
-            log("[STOP] Limite ciclo: {}".format(pub))
+        # STOP se ho raggiunto base + tutto il boost WOW disponibile
+        if pub >= max_posts_cycle + wow_boost_max:
+            log("[STOP] Limite totale ciclo: {} (base {} + wow {}/{})".format(
+                pub, max_posts_cycle, wow_pub, wow_boost_max))
             break
+
         if not is_publish_time():
             break
+
         if is_posted(posted, d["asin"]):
             continue
 
         cat = get_deal_category(d["title"])
+        is_wow = is_wow_deal(d)
 
-        # CAP per categoria in QUESTO ciclo
+        # Se ho gia' raggiunto la base normale, accetto SOLO offerte WOW
+        if pub >= max_posts_cycle:
+            if not is_wow:
+                continue  # skip silenzioso, le NON-WOW non passano il limite
+            if wow_pub >= wow_boost_max:
+                log("[STOP] Limite WOW raggiunto: {}".format(wow_pub))
+                break
+
+        # CAP per categoria nel ciclo (no piu' di 1 per categoria)
         if cat_count_cycle.get(cat, 0) >= MAX_PER_CAT_CYCLE:
-            skipped_for_cat.append((cat, d["title"][:30]))
-            continue
+            # Eccezione: se e' WOW e sono sotto wow_boost_max, lasciamo passare
+            if is_wow and wow_pub < wow_boost_max and pub >= max_posts_cycle:
+                pass  # passa, e' WOW e siamo in fase boost
+            else:
+                skipped_for_cat.append((cat, d["title"][:30]))
+                continue
 
         # ANTI-RIPETIZIONE: skip se le ultime 3 erano della stessa categoria
-        # (e ho ancora altre categorie da provare nel pool)
-        if recent_categories.count(cat) >= 2:
-            # Verifica se ci sono altre categorie disponibili nel resto del pool
+        # (a meno che sia WOW)
+        if not is_wow and recent_categories.count(cat) >= 2:
             remaining_cats = set()
             for other in all_deals:
                 if not is_posted(posted, other["asin"]) and cat_count_cycle.get(get_deal_category(other["title"]), 0) == 0:
@@ -1752,19 +2046,23 @@ def main():
                     if other_cat != cat:
                         remaining_cats.add(other_cat)
             if remaining_cats:
-                log("[SKIP-REPEAT] {} (ultime 3 erano: {})".format(cat, recent_categories))
-                skipped_for_cat.append((cat, d["title"][:30]))
+                skipped_for_repeat.append((cat, d["title"][:30]))
                 continue
 
+        # Pubblica!
         dn = count_deals(posted) + 1
         sp = "flash" if d.get("has_deal") or d["discount_percent"] >= FLASH_DEAL_PERCENT else None
-        log("[PUB #{}] {} -{}% | {}".format(dn, cat, d["discount_percent"], d["title"][:40]))
+        wow_tag = " 🔥WOW" if is_wow and pub >= max_posts_cycle else ""
+        log("[PUB #{}{}] {} -{}% | {}".format(
+            dn, wow_tag, cat, d["discount_percent"], d["title"][:40]))
         ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
         if ok:
             mark_posted(posted, d["asin"])
             save_posted(posted)
             save_deal_stat(d)
             pub += 1
+            if pub > max_posts_cycle:
+                wow_pub += 1
             cat_count_cycle[cat] = cat_count_cycle.get(cat, 0) + 1
             recent_categories.append(cat)
             if len(recent_categories) > 3:
@@ -1776,6 +2074,8 @@ def main():
 
     if skipped_for_cat:
         log("[SKIPPED per cap categoria]: {}".format(len(skipped_for_cat)))
+    if skipped_for_repeat:
+        log("[SKIPPED per ripetizione]: {}".format(len(skipped_for_repeat)))
 
     log("=" * 60)
     log("[RIEPILOGO] Pubblicate {} | Totale oggi: {}".format(pub, count_deals(posted)))
