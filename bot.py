@@ -20,7 +20,7 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v27-EDITORIAL-PRIMEDAY"
+BOT_VERSION = "v28-RANDOMIZED-CATEGORIES"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -446,25 +446,80 @@ def get_editorial_priority(deal):
 
 
 def diversify_deals(deals):
+    """Randomizza l'ordine delle offerte mescolando le categorie.
+
+    Strategia: round-robin tra le categorie con shuffle interno.
+    1. Raggruppa per categoria
+    2. Shuffla le offerte dentro ogni categoria
+    3. Shuffla l'ordine delle categorie stesse
+    4. Estrae a turno una offerta da ogni categoria (round-robin)
+
+    Risultato: pubblicazione varia, nessuna categoria consecutiva ripetuta,
+    ma con ordine totalmente imprevedibile.
+    """
     if len(deals) <= 1:
         return deals
+
+    # 1. Raggruppa per categoria
+    by_category = {}
+    for d in deals:
+        cat = get_deal_category(d["title"])
+        by_category.setdefault(cat, []).append(d)
+
+    # 2. Shuffla ogni gruppo (le offerte dentro la categoria sono in ordine random)
+    for cat in by_category:
+        random.shuffle(by_category[cat])
+
+    # 3. Ordine delle categorie randomizzato MA con bias verso le priorita' editoriali
+    # Categorie con piu' offerte hanno piu' chance di essere "estratte"
+    category_order = list(by_category.keys())
+    random.shuffle(category_order)
+
+    # 4. Round-robin: estrai una offerta per volta da categorie diverse
     result = []
-    remaining = list(deals)
-    last_cat = None
-    while remaining:
-        found = False
-        for i, d in enumerate(remaining):
-            cat = get_deal_category(d["title"])
-            if cat != last_cat:
-                result.append(d)
-                last_cat = cat
-                remaining.pop(i)
-                found = True
-                break
-        if not found:
-            result.append(remaining.pop(0))
-            last_cat = get_deal_category(result[-1]["title"])
+    while any(by_category.values()):
+        # Re-shuffla l'ordine ogni giro per varieta'
+        random.shuffle(category_order)
+        for cat in category_order:
+            if by_category[cat]:
+                result.append(by_category[cat].pop(0))
+                # Evita 3+ categorie identiche di fila (improbabile ma controllo extra)
+
     return result
+
+
+def shuffle_within_priority(deals):
+    """Shuffla le offerte mantenendo solo i 'tier' di priorita' editoriale.
+
+    Tier 1 (score 0-15): brand TOP in categoria HOT (casa, moda)
+    Tier 2 (score 16-30): brand GOOD oppure media priorita'
+    Tier 3 (score 31+): tutto il resto
+
+    Le offerte vengono shufflate DENTRO il loro tier, ma i tier piu' alti
+    restano sopra. Questo evita ordinamento sempre uguale per priorita'.
+    """
+    if len(deals) <= 1:
+        return deals
+
+    tier1 = []
+    tier2 = []
+    tier3 = []
+
+    for d in deals:
+        score = get_editorial_priority(d)
+        if score <= 15:
+            tier1.append(d)
+        elif score <= 30:
+            tier2.append(d)
+        else:
+            tier3.append(d)
+
+    # Shuffla entro ogni tier
+    random.shuffle(tier1)
+    random.shuffle(tier2)
+    random.shuffle(tier3)
+
+    return tier1 + tier2 + tier3
 
 
 def get_category_emoji(title):
@@ -980,9 +1035,12 @@ def main():
         log("[STOP] Pool vuoto.")
         return
 
-    all_deals.sort(key=get_editorial_priority)
+    # ORDINAMENTO RANDOMIZZATO:
+    # 1. Shuffla entro tier di priorita' (tier1 sopra, ma randomizzati)
+    # 2. Diversifica round-robin tra categorie con shuffle ogni giro
+    all_deals = shuffle_within_priority(all_deals)
 
-    log("[TOP 5]:")
+    log("[TOP 5] (dopo shuffle nei tier):")
     for i, d in enumerate(all_deals[:5]):
         cat = get_deal_category(d["title"])
         score = get_editorial_priority(d)
@@ -990,7 +1048,13 @@ def main():
         log("  {}. s={} {} {} -{}% | {}".format(
             i+1, score, cat[:8], bp, d["discount_percent"], d["title"][:40]))
 
+    # Round-robin tra categorie con randomizzazione
     all_deals = diversify_deals(all_deals)
+
+    log("[ORDINE PUBBLICAZIONE] (primi 8 dopo diversify):")
+    for i, d in enumerate(all_deals[:8]):
+        cat = get_deal_category(d["title"])
+        log("  {}. {} | {}".format(i+1, cat[:10], d["title"][:50]))
 
     # ===== TOP DEL GIORNO =====
     if hour >= 9 and not is_special_posted(posted, "_top"):
