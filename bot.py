@@ -1,10 +1,11 @@
 """
-Sottocosto Oggi - Bot v30 HYBRID BROWSE NODES
-Novita' v30:
-- Browse nodes Amazon Italia (24 categorie) per catturare TUTTO il catalogo
+Sottocosto Oggi - Bot v31 FULL CATEGORIES
+Novita' v31:
+- 22 browse nodes Amazon Italia (categorie complete ufficiali)
+- 10 categorie shufflate per ciclo (evita rate limit)
 - Keyword generiche senza brand-bias (44 keyword)
 - Keyword brand premium shufflate per varieta'
-- Fallback automatico su keyword se browse_node_id non supportato
+- Throttling 2.5s (no piu' rate limit errors)
 - Cap stretto 1 offerta/categoria per ciclo
 - Anti-ripetizione delle ultime 3 categorie
 - Palinsesto orari peak (8-9, 12-13, 20-22)
@@ -24,7 +25,7 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v30-HYBRID-BROWSE-NODES"
+BOT_VERSION = "v31-FULL-CATEGORIES"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -190,49 +191,53 @@ EVENING_KEYWORDS = [
 # ============================================================
 
 AMAZON_IT_BROWSE_NODES = {
-    # Casa, cucina, arredo
-    "Casa e cucina":           "524015031",
-    "Elettrodomestici":        "412606031",
-    "Bricolage e Fai da te":   "524012031",
-    "Giardino e giardinaggio": "524013031",
-    "Illuminazione":           "3155356031",
+    # ===== CASA, ARREDO, ELETTRODOMESTICI (priorita' editoriale 1) =====
+    "Casa e cucina":                    "524015031",
+    "Grandi elettrodomestici":          "412606031",
+    "Illuminazione":                    "3155356031",
 
-    # Moda e accessori
-    "Moda":                    "524017031",
-    "Scarpe":                  "8463981031",
-    "Borse, scarpe":           "8463981031",
-    "Gioielli":                "1571265031",
-    "Orologi":                 "524023031",
+    # ===== FAI DA TE, GIARDINO (priorita' 1.5) =====
+    "Fai da te":                        "524012031",
+    "Giardino e giardinaggio":          "524013031",
 
-    # Sport e tempo libero
-    "Sport e tempo libero":    "524014031",
+    # ===== MODA, SCARPE, ACCESSORI (priorita' 2) =====
+    "Moda":                             "524017031",
+    "Scarpe e borse":                   "8463981031",
+    "Valigeria":                        "1571282031",
 
-    # Bellezza e cura personale
-    "Bellezza":                "11962031",
-    "Salute e cura della persona": "524027031",
+    # ===== SPORT (priorita' 3) =====
+    "Sport e tempo libero":             "524014031",
 
-    # Elettronica (priorita' MENO alta visto che ne abbiamo tanta gia')
-    "Elettronica":             "412609031",
-    "Informatica":             "412610031",
-    "Videogiochi":             "412603031",
+    # ===== BELLEZZA, SALUTE (priorita' 4) =====
+    "Bellezza":                         "11962031",
+    "Salute e cura della persona":      "524027031",
 
-    # Bambini e neonati
-    "Prima infanzia":          "1571278031",
-    "Giochi e giocattoli":     "412607031",
+    # ===== INFANZIA, GIOCHI =====
+    "Prima infanzia":                   "1571278031",
+    "Giochi e giocattoli":              "412607031",
 
-    # Animali, libri, cibo
-    "Prodotti per animali":    "8606827031",
-    "Libri":                   "411663031",
-    "Alimentari e cura della casa": "5866074031",
+    # ===== ELETTRONICA (priorita' MENO alta, ne abbiamo gia' tanta) =====
+    "Elettronica":                      "412609031",
+    "Informatica":                      "412610031",
+    "Videogiochi":                      "412603031",
 
-    # Auto e moto
-    "Auto e moto":             "524011031",
+    # ===== ANIMALI =====
+    "Prodotti per animali":             "8606827031",
 
-    # Cancelleria e ufficio
-    "Cancelleria e ufficio":   "412602031",
+    # ===== LIBRI E MEDIA =====
+    "Libri":                            "411663031",
 
-    # Strumenti musicali
-    "Strumenti musicali":      "412605031",
+    # ===== AUTO E MOTO =====
+    "Auto e moto":                      "524011031",
+
+    # ===== UFFICIO E CANCELLERIA =====
+    "Cancelleria e prodotti per ufficio": "412602031",
+
+    # ===== ALIMENTARI =====
+    "Alimentari e cura della casa":     "6198082031",
+
+    # ===== INDUSTRIA E SCIENZA =====
+    "Commercio, Industria e Scienza":   "2454160031",
 }
 
 # Search Index Amazon (macro-categorie)
@@ -407,7 +412,7 @@ def create_api():
         credential_id=AMAZON_CREDENTIAL_ID,
         credential_secret=AMAZON_CREDENTIAL_SECRET,
         version="3.2", tag=AMAZON_PARTNER_TAG,
-        country=Country.IT, throttling=1.0,
+        country=Country.IT, throttling=2.5,  # aumentato da 1.0 a 2.5 sec tra chiamate
     )
 
 
@@ -1133,12 +1138,23 @@ def main():
             if new_count > 0:
                 log("  [{}] -> {}".format(kw[:35], new_count))
 
-    def search_browse_nodes_phase(name, nodes_dict):
-        """Cerca per browse_node_id. Restituisce TUTTO il catalogo di una categoria."""
-        log("=== FASE {}: {} browse nodes ===".format(name, len(nodes_dict)))
+    def search_browse_nodes_phase(name, nodes_dict, max_nodes_per_cycle=None):
+        """Cerca per browse_node_id. Restituisce TUTTO il catalogo di una categoria.
+
+        max_nodes_per_cycle: limita quanti nodi interrogare per ciclo
+        (utile per evitare rate limit dell'API).
+        """
         # Shuffla l'ordine delle categorie per varieta'
         items = list(nodes_dict.items())
         random.shuffle(items)
+
+        # Limita a N nodi per ciclo (gli altri saranno cercati al prossimo run)
+        if max_nodes_per_cycle and len(items) > max_nodes_per_cycle:
+            items = items[:max_nodes_per_cycle]
+
+        log("=== FASE {}: {} browse nodes (di {} totali) ===".format(
+            name, len(items), len(nodes_dict)))
+
         for cat_name, node_id in items:
             if len(all_deals) >= MAX_DEALS_POOL:
                 break
@@ -1179,9 +1195,10 @@ def main():
 
     # ===========================================
     # FASE 2: BROWSE NODES - cattura TUTTO il catalogo per categoria
-    # Questa e' la fase chiave: pesca da TUTTE le categorie senza keyword bias
+    # Limitato a 10 nodi shufflati per ciclo (evita rate limit)
     # ===========================================
-    search_browse_nodes_phase("2 BROWSE NODES (catalogo per categoria)", AMAZON_IT_BROWSE_NODES)
+    search_browse_nodes_phase("2 BROWSE NODES (catalogo per categoria)",
+                              AMAZON_IT_BROWSE_NODES, max_nodes_per_cycle=10)
     log("[POOL] Dopo F2 (browse): {}".format(len(all_deals)))
 
     # ===========================================
