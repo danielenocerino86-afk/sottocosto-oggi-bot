@@ -1,9 +1,10 @@
 """
-Sottocosto Oggi - Bot v26 EDITORIAL
-- Modalità diagnostica: log dettagliato di ogni decisione
-- Regole editoriali: priorità categorie casa/cucina, moda, sport, bellezza, elettronica
-- Anti-loop: auto-pulisce memoria se troppo piena
-- Filtri di qualità per marchi noti
+Sottocosto Oggi - Bot v27 EDITORIAL + PRIME DAY
+Novita' v27:
+- Palinsesto orari peak (8-9, 12-13, 20-22)
+- Countdown automatico Prime Day 23-26 giugno 2026
+- Boost pubblicazioni in fasce alto engagement
+- Trigger endpoint /healthcheck per cron-job.org
 """
 
 import os
@@ -12,13 +13,14 @@ import datetime
 import time
 import random
 import re
+import sys
 import requests
 from pathlib import Path
 
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v26-EDITORIAL"
+BOT_VERSION = "v27-EDITORIAL-PRIMEDAY"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -29,20 +31,22 @@ AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 # ========== CONFIG ==========
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "10"))
 FLASH_DEAL_PERCENT = 50
-MIN_PRICE = 9.0           # piu' permissivo
+MIN_PRICE = 9.0
 MIN_RATING = 3.5
-MIN_REVIEWS = 25          # ridotto da 30
+MIN_REVIEWS = 25
 NO_RATING_MIN_PRICE = 20.0
-MAX_POSTS_PER_CYCLE = 5
-MAX_DEALS_POOL = 200      # aumentato per piu' scelta
+MAX_DEALS_POOL = 200
 POST_INTERVAL_SECONDS = 90
+MAX_MEMORY_SIZE = 500
 
+# Orari di pubblicazione: 7-23 IT
 PUBLISH_START_HOUR = 7
 PUBLISH_END_HOUR = 23
 TIMEZONE_OFFSET = 2
 
-# Anti-loop: se memoria > N, resetta (probabile bug)
-MAX_MEMORY_SIZE = 500
+# ========== PRIME DAY 2026 ==========
+PRIME_DAY_START = datetime.date(2026, 6, 23)
+PRIME_DAY_END = datetime.date(2026, 6, 26)
 
 POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 STATS_FILE = Path(__file__).parent / "daily_stats.json"
@@ -53,78 +57,77 @@ def log(msg):
 
 
 # ============================================================
-# REGOLE EDITORIALI
+# FASCE ORARIE EDITORIALI
 # ============================================================
 
-# PRIORITA' categorie (in ordine come da richiesta editoriale)
+def get_peak_multiplier(hour):
+    """Ritorna moltiplicatore offerte/ciclo per fascia oraria.
+    Fasce peak (8-9, 12-13, 20-22): 7-8 offerte/ciclo
+    Fasce normali: 4-5 offerte/ciclo
+    Fasce basse: 2-3 offerte/ciclo
+    """
+    if hour in (8, 9, 12, 13, 20, 21, 22):
+        return 7  # peak
+    if hour in (10, 11, 14, 15, 17, 18, 19):
+        return 5  # normale
+    return 3  # bassa (7, 16, 23)
+
+
+# ============================================================
+# REGOLE EDITORIALI - PRIORITA' CATEGORIE
+# ============================================================
+
 CATEGORY_PRIORITY = {
-    'casa_cucina': 1,     # MASSIMA priorita'
-    'cucina': 1,
-    'casaarredo': 1,
-    'moda': 2,
-    'abbigliamento': 2,
-    'scarpe': 2,
-    'borse': 2,
-    'gioielli': 2,
+    'casa_cucina': 1, 'cucina': 1, 'casaarredo': 1,
+    'moda': 2, 'abbigliamento': 2, 'scarpe': 2, 'borse': 2, 'gioielli': 2,
     'sport': 3,
-    'bellezza': 4,
-    'curapersona': 4,
-    'audio': 5,           # elettronica
-    'smartphone': 5,
-    'tablet': 5,
-    'tv': 5,
-    'wearable': 5,
-    'laptop': 5,
-    'gaming': 5,
-    'foto': 5,
-    'smarthome': 5,
+    'bellezza': 4, 'curapersona': 4,
+    'audio': 5, 'smartphone': 5, 'tablet': 5, 'tv': 5,
+    'wearable': 5, 'laptop': 5, 'gaming': 5, 'foto': 5, 'smarthome': 5,
     'accessori': 6,
     'altro': 9,
 }
 
-# MARCHI NOTI - quelli con priorita' alta
 TRUSTED_BRANDS = {
     'top': ['Apple', 'Samsung', 'Sony', 'Bose', 'Dyson', 'Philips', 'Bosch',
             'LEGO', 'Levi\'s', 'Nike', 'Adidas', 'Ray-Ban', 'Garmin',
             'L\'Oreal', 'Estée Lauder', 'Chanel', 'Dior', 'Kerastase',
             'KitchenAid', 'De\'Longhi', 'Nespresso', 'Tefal', 'Le Creuset',
-            'iRobot', 'Roomba', 'Roborock'],
+            'iRobot', 'Roomba', 'Roborock', 'Shark', 'Oral-B'],
     'good': ['Xiaomi', 'JBL', 'Logitech', 'Anker', 'Kindle', 'Echo',
              'Tommy Hilfiger', 'Calvin Klein', 'Puma', 'New Balance',
              'Maybelline', 'Clinique', 'Lancome', 'Pandora', 'Swarovski',
              'Ninja', 'Lavazza', 'Krups', 'WMF', 'Kenwood',
              'TP-Link', 'Netgear', 'Asus', 'HP', 'Lenovo', 'Dell',
-             'GoPro', 'DJI', 'Canon', 'Fitbit', 'Amazfit'],
+             'GoPro', 'DJI', 'Canon', 'Fitbit', 'Amazfit', 'Braun', 'Remington'],
 }
 
 
 # ============================================================
-# KEYWORD ORGANIZZATE PER PRIORITA' EDITORIALE
+# KEYWORD ORGANIZZATE
 # ============================================================
 
-# Priorita' 1: Deal attivi Amazon
 DEAL_KEYWORDS = [
     "offerta del giorno", "offerta lampo",
     "deal today amazon", "offerte oggi",
     "sconto del giorno", "offerta limitata",
 ]
 
-# Priorita' 2: CASA/CUCINA (categoria editoriale top)
 HOUSE_KITCHEN_KEYWORDS = [
     "De'Longhi macchina caffe", "Nespresso offerta",
     "KitchenAid", "Kenwood robot cucina",
     "Ninja friggitrice aria", "Philips friggitrice",
     "Tefal padella", "Le Creuset",
-    "WMF pentole", "Bialetti caffe",
+    "WMF pentole", "Bialetti",
     "Russell Hobbs", "Smeg piccoli elettrodomestici",
     "Joseph Joseph cucina", "Brabantia",
     "Tempur cuscino", "Emma materasso",
     "Lenzuola raso cotone", "Kärcher idropulitrice",
     "iRobot Roomba", "Roborock", "Dreame robot",
     "Dyson aspirapolvere", "Philips Hue",
+    "Shark aspirapolvere", "Vorwerk Folletto",
 ]
 
-# Priorita' 3: MODA
 FASHION_KEYWORDS = [
     "Levi's jeans", "Tommy Hilfiger", "Calvin Klein",
     "Lacoste polo", "Ralph Lauren",
@@ -136,16 +139,15 @@ FASHION_KEYWORDS = [
     "Pinko", "Liu Jo",
 ]
 
-# Priorita' 4: SPORT
 SPORT_KEYWORDS = [
     "Nike running", "Adidas running",
     "ASICS running", "Brooks running",
     "Garmin GPS", "Theragun",
     "Decathlon", "Columbia outdoor",
     "The North Face", "Salomon",
+    "Under Armour",
 ]
 
-# Priorita' 5: BELLEZZA
 BEAUTY_KEYWORDS = [
     "L'Oreal Paris", "Maybelline", "NYX Professional",
     "Clinique", "Estee Lauder", "Lancome crema",
@@ -155,9 +157,9 @@ BEAUTY_KEYWORDS = [
     "Oral-B elettrico", "Philips Sonicare",
     "Chanel profumo", "Dior profumo",
     "Babyliss", "Remington",
+    "Garnier", "Olaplex",
 ]
 
-# Priorita' 6: ELETTRONICA (qualita')
 TECH_KEYWORDS = [
     "iPhone offerta", "Samsung Galaxy", "Apple Watch",
     "Sony cuffie", "Bose cuffie", "JBL speaker",
@@ -171,7 +173,6 @@ TECH_KEYWORDS = [
     "Garmin smartwatch", "Fitbit", "Amazfit",
 ]
 
-# Keyword fresh per ore serali
 EVENING_KEYWORDS = [
     "best seller offerta", "piu venduti",
     "Top rated", "amazon choice",
@@ -179,7 +180,10 @@ EVENING_KEYWORDS = [
     "appena uscito", "scopri Amazon",
 ]
 
-# Blacklist marchi scadenti / cinesi sconosciuti
+# ============================================================
+# BLACKLIST
+# ============================================================
+
 BRAND_BLACKLIST = [
     "dmoao", "timu", "yestel", "teclast", "oscal", "oukitel",
     "blackview", "umidigi", "cubot", "doogee", "ulefone", "hotwav",
@@ -231,6 +235,23 @@ def is_publish_time():
     return PUBLISH_START_HOUR <= h < PUBLISH_END_HOUR
 
 
+def days_until_prime_day():
+    today = get_italy_now().date()
+    delta = (PRIME_DAY_START - today).days
+    return delta
+
+
+def is_prime_day_active():
+    today = get_italy_now().date()
+    return PRIME_DAY_START <= today <= PRIME_DAY_END
+
+
+def is_prime_day_countdown_phase():
+    """Countdown phase: 14 giorni prima dell'inizio."""
+    d = days_until_prime_day()
+    return 0 < d <= 14
+
+
 def clean_title(title):
     title = re.sub(r'\s+', ' ', title).strip()
     title = re.sub(r'[,/|]\s*(?:compatibile con|adatto per|per)\s+[\w\s/,]+$', '', title, flags=re.IGNORECASE)
@@ -262,7 +283,6 @@ def is_spam(title):
 
 
 def brand_priority(title):
-    """Ritorna priorita' del brand: 0=trusted top, 1=trusted good, 2=unknown."""
     t = title.lower()
     for brand in TRUSTED_BRANDS['top']:
         if brand.lower() in t:
@@ -387,8 +407,8 @@ def parse_item(item):
 def get_deal_category(title):
     t = title.lower()
     if any(w in t for w in ["caffe", "nespresso", "espresso", "friggitrice", "kitchenaid", "robot cucina", "pentole", "coltelli", "frullator", "impastatric", "tefal", "le creuset", "wmf"]): return "cucina"
-    if any(w in t for w in ["aspira", "robot pulizia", "roomba", "roborock", "dreame", "dyson v", "kärcher", "karcher"]): return "casaarredo"
-    if any(w in t for w in ["materass", "cuscin", "asciugamani", "copripiumino", "lenzuol", "piumino", "lampad", "candela", "tappeto", "phillips hue", "hue"]): return "casaarredo"
+    if any(w in t for w in ["aspira", "robot pulizia", "roomba", "roborock", "dreame", "dyson v", "kärcher", "karcher", "shark"]): return "casaarredo"
+    if any(w in t for w in ["materass", "cuscin", "asciugamani", "copripiumino", "lenzuol", "piumino", "lampad", "candela", "tappeto", "hue"]): return "casaarredo"
     if any(w in t for w in ["scarp", "sneaker", "stival", "ciabatt", "sandal", "birkenstock"]): return "scarpe"
     if any(w in t for w in ["jeans", "camicia", "magliett", "t-shirt", "felpa", "giacca", "pantalo", "vestit", "abito", "polo"]): return "abbigliamento"
     if any(w in t for w in ["borsa", "zaino", "trolley", "valigia"]): return "borse"
@@ -405,23 +425,19 @@ def get_deal_category(title):
     if any(w in t for w in ["fotocamera", "camera", "gopro", "drone", "dji"]): return "foto"
     if any(w in t for w in ["playstation", "ps5", "xbox", "nintendo", "gaming", "controller"]): return "gaming"
     if any(w in t for w in ["alexa", "echo", "nest", "ring videoc", "domotica", "tapo"]): return "smarthome"
-    if any(w in t for w in ["lego", "barbie", "puzzle", "peluche", "passeggino", "seggiolino", "playmobil"]): return "bambini"
     if any(w in t for w in ["caricatore", "power bank", "cavo usb", "hub usb", "anker"]): return "accessori"
     return "altro"
 
 
 def get_editorial_priority(deal):
-    """Score editoriale: piu' basso = priorita' maggiore."""
     cat = get_deal_category(deal['title'])
     cat_prio = CATEGORY_PRIORITY.get(cat, 9)
     brand = deal.get('brand_prio', 2)
-    # Componi: categoria (peso 10) + brand (peso 3) - has_deal (-5)
     score = cat_prio * 10 + brand * 3
     if deal.get('has_deal'):
         score -= 5
     if deal.get('_is_active_deal'):
         score -= 8
-    # Bonus sconto alto
     if deal['discount_percent'] >= 50:
         score -= 5
     elif deal['discount_percent'] >= 30:
@@ -430,7 +446,6 @@ def get_editorial_priority(deal):
 
 
 def diversify_deals(deals):
-    """Diversifica per categoria mantenendo l'ordine di priorita'."""
     if len(deals) <= 1:
         return deals
     result = []
@@ -507,7 +522,6 @@ def send_telegram(text, image_url=None, reply_markup=None):
         r.raise_for_status()
         j = r.json()
         if not j.get("ok"):
-            log("  [TG_FAIL] msg: {}".format(j.get("description", "??")))
             return False
         return True
     except Exception as e:
@@ -586,7 +600,7 @@ def format_deal(deal, dn=0, special=None):
 
 
 # ============================================================
-# PROMO AFFILIATE
+# MESSAGGI SPECIALI
 # ============================================================
 
 def send_good_morning():
@@ -595,10 +609,8 @@ def send_good_morning():
 
 
 def send_prime_promo(t):
-    msgs = [
-        "\U0001f4e6 <b>Amazon Prime \u2014 Prova gratuita 30 giorni</b>\n\nSpedizioni illimitate in 1 giorno, Prime Video, Prime Music, foto illimitate e accesso anticipato alle Offerte Lampo.\n\nGratis per 30 giorni. Cancelli quando vuoi.\n\n\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Attiva la prova gratuita</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t),
-    ]
-    send_telegram(random.choice(msgs))
+    msg = "\U0001f4e6 <b>Amazon Prime \u2014 Prova gratuita 30 giorni</b>\n\nSpedizioni illimitate in 1 giorno, Prime Video, Prime Music, foto illimitate e accesso anticipato alle Offerte Lampo.\n\nGratis per 30 giorni. Cancelli quando vuoi.\n\n\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Attiva la prova gratuita</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t)
+    send_telegram(msg)
     log("[OK] Prime!")
 
 
@@ -635,8 +647,99 @@ def send_evening_recap(today):
     log("[OK] Recap!")
 
 
+# ========== PRIME DAY ==========
+
+def send_prime_day_countdown(t):
+    """Countdown automatico Prime Day."""
+    days = days_until_prime_day()
+    partner = t
+
+    if days <= 0:
+        return
+
+    if days == 14:
+        msg = (
+            "\U0001f525 <b>14 GIORNI AL PRIME DAY 2026!</b> \U0001f525\n\n"
+            "Dal 23 al 26 giugno: 4 giorni di sconti esclusivi su Amazon.\n\n"
+            "\U0001f389 Migliaia di offerte su:\n"
+            "\u2022 Casa e cucina\n"
+            "\u2022 Tech ed elettronica\n"
+            "\u2022 Moda e bellezza\n"
+            "\u2022 Sport e tempo libero\n\n"
+            "\u26a0\ufe0f <b>Solo per membri Prime!</b>\n\n"
+            "\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Attiva la prova gratuita 30 giorni</a>\n\n"
+            "Resta connesso sul canale per il countdown e le anteprime!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
+        ).format(t=partner)
+    elif days == 7:
+        msg = (
+            "\u23f3 <b>1 SETTIMANA AL PRIME DAY!</b>\n\n"
+            "Dal 23 al 26 giugno scopri le offerte piu' incredibili dell'anno!\n\n"
+            "\U0001f4dd Categorie da tenere d'occhio:\n"
+            "\U0001f3e0 Casa e cucina (KitchenAid, De'Longhi, Nespresso)\n"
+            "\U0001f4f1 Tech (Apple, Samsung, Sony)\n"
+            "\U0001f484 Bellezza (L'Oreal, Estee Lauder, GHD)\n"
+            "\U0001f455 Moda (Levi's, Nike, Adidas)\n\n"
+            "\u26a0\ufe0f Le offerte sono solo per membri Prime.\n\n"
+            "\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Non hai ancora Prime? Provalo gratis 30 giorni</a>\n\n"
+            "\U0001f4f2 <b>@sottocosto_oggi</b>"
+        ).format(t=partner)
+    elif days == 3:
+        msg = (
+            "\U0001f6a8 <b>3 GIORNI AL PRIME DAY!</b> \U0001f6a8\n\n"
+            "Pronto per 4 giorni di shopping selvaggio?\n\n"
+            "\U0001f4cb Checklist Pre-Prime Day:\n"
+            "\u2705 Membership Prime attiva\n"
+            "\u2705 Lista desideri aggiornata\n"
+            "\u2705 App Amazon installata\n"
+            "\u2705 Notifiche @sottocosto_oggi attive\n\n"
+            "\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Attiva Prime se non ce l'hai</a>\n\n"
+            "\U0001f4f2 <b>@sottocosto_oggi</b>"
+        ).format(t=partner)
+    elif days == 1:
+        msg = (
+            "\U0001f525 <b>DOMANI INIZIA IL PRIME DAY 2026!</b> \U0001f525\n\n"
+            "Le migliori offerte dell'anno stanno per arrivare.\n\n"
+            "\U0001f4c5 Quando: dal 23 al 26 giugno\n"
+            "\U0001f3af A chi: solo membri Prime\n\n"
+            "\u26a1 Le offerte vanno a ruba in pochi minuti!\n\n"
+            "Pubblicheremo SOLO le migliori, in tempo reale.\n\U0001f514 Attiva le notifiche del canale!\n\n"
+            "\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Ultimo momento per attivare Prime</a>\n\n"
+            "\U0001f4f2 <b>@sottocosto_oggi</b>"
+        ).format(t=partner)
+    else:
+        # Countdown generico (es. 13, 12, 11... giorni)
+        msg = (
+            "\u23f3 <b>-{n} GIORNI AL PRIME DAY 2026</b>\n\n"
+            "Mancano sempre meno giorni alle migliori offerte dell'anno!\n\n"
+            "\U0001f4c5 23-26 giugno - solo membri Prime\n\n"
+            "\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Attiva Prime gratis 30 giorni</a>\n\n"
+            "\U0001f4f2 <b>@sottocosto_oggi</b>"
+        ).format(n=days, t=partner)
+
+    send_telegram(msg)
+    log("[OK] Countdown PD! ({} giorni)".format(days))
+
+
+def send_prime_day_live(t):
+    """Messaggio durante Prime Day attivo."""
+    today = get_italy_now().date()
+    day_num = (today - PRIME_DAY_START).days + 1
+    total_days = 4
+
+    msg = (
+        "\U0001f525 <b>PRIME DAY GIORNO {n}/{tot}</b> \U0001f525\n\n"
+        "Le offerte piu' calde dell'anno sono ATTIVE ORA!\n\n"
+        "\u26a1 Le migliori vanno via in pochi minuti\n"
+        "\U0001f514 Attiva le notifiche per non perdere nulla\n\n"
+        "\U0001f449 <a href=\"https://www.amazon.it/primeday?tag={t}\">Esplora Prime Day su Amazon</a>\n\n"
+        "Stiamo pubblicando le migliori offerte in tempo reale!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
+    ).format(n=day_num, tot=total_days, t=t)
+    send_telegram(msg)
+    log("[OK] Prime Day live!")
+
+
 # ============================================================
-# PERSISTENZA con auto-clean
+# PERSISTENZA
 # ============================================================
 
 def load_stats():
@@ -661,23 +764,17 @@ def save_deal_stat(deal):
 
 
 def load_posted():
-    """Mantiene memoria di ASIN posted. Auto-pulisce se troppo grande."""
     try:
         data = json.loads(POSTED_FILE.read_text()) if POSTED_FILE.exists() else {}
         if not isinstance(data, dict):
             return {}
-
-        # Mantieni solo oggi + ieri
         yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
         filtered = {k: v for k, v in data.items() if k >= yesterday}
-
-        # CONTROLLO AUTO-CLEAN: se totale ASIN > MAX_MEMORY_SIZE, resetta IERI
         total_asins = sum(len(v) for v in filtered.values())
         if total_asins > MAX_MEMORY_SIZE:
             log("[CLEAN] Memoria piena ({} ASIN). Pulisco IERI.".format(total_asins))
             today = datetime.date.today().isoformat()
             filtered = {today: filtered.get(today, [])}
-
         return filtered
     except Exception as e:
         log("[ERR] load_posted: {}".format(e))
@@ -714,7 +811,7 @@ def is_special_posted(p, k):
 
 
 # ============================================================
-# MAIN con diagnostica completa
+# MAIN
 # ============================================================
 
 def main():
@@ -722,15 +819,19 @@ def main():
     hour = now.hour
     today = datetime.date.today().isoformat()
     wd = now.weekday()
+    pd_days = days_until_prime_day()
+    pd_active = is_prime_day_active()
 
-    log("=" * 50)
+    log("=" * 60)
     log("=== BOT {} ===".format(BOT_VERSION))
     log("=== UTC: {} | IT: {} ===".format(
         datetime.datetime.now().isoformat()[:19], now.strftime("%H:%M")))
-    log("=" * 50)
+    log("=== Prime Day: {} | Days: {} ===".format(
+        "ATTIVO" if pd_active else "FUTURO", pd_days))
+    log("=" * 60)
 
     if not is_publish_time():
-        log("[STOP] Notte. Hour={}, range={}-{}".format(hour, PUBLISH_START_HOUR, PUBLISH_END_HOUR))
+        log("[STOP] Notte. Hour={}".format(hour))
         return
 
     missing = [v for v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID",
@@ -743,7 +844,9 @@ def main():
     posted = load_posted()
     posted_count_today = count_deals(posted)
     seen_count = sum(len(v) for v in posted.values())
-    log("[STATE] Memoria: {} ASIN totali | Oggi: {} pubblicati".format(seen_count, posted_count_today))
+    max_posts_cycle = get_peak_multiplier(hour)
+    log("[STATE] Memoria: {} ASIN | Oggi: {} pubblicati | Max/ciclo: {}".format(
+        seen_count, posted_count_today, max_posts_cycle))
 
     # ===== PALINSESTO SPECIALI =====
     if hour == 7 and not is_special_posted(posted, "_am"):
@@ -752,29 +855,49 @@ def main():
         save_posted(posted)
         time.sleep(5)
 
-    if hour == 11 and not is_special_posted(posted, "_pr"):
-        send_prime_promo(AMAZON_PARTNER_TAG)
-        mark_posted(posted, "_pr")
-        save_posted(posted)
-        time.sleep(5)
+    # PRIME DAY: countdown automatici
+    if pd_days in [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]:
+        key = "_pd_cd_{}".format(pd_days)
+        # Pubblica countdown alle 9:00 nei giorni di countdown
+        if hour == 9 and not is_special_posted(posted, key):
+            send_prime_day_countdown(AMAZON_PARTNER_TAG)
+            mark_posted(posted, key)
+            save_posted(posted)
+            time.sleep(5)
 
-    if hour == 14 and not is_special_posted(posted, "_pv"):
-        send_prime_video_promo(AMAZON_PARTNER_TAG)
-        mark_posted(posted, "_pv")
-        save_posted(posted)
-        time.sleep(5)
+    # PRIME DAY ATTIVO: messaggio live
+    if pd_active:
+        # Messaggio live alle 9:00 e 14:00 e 20:00
+        for h, suffix in [(9, "am"), (14, "pm"), (20, "ev")]:
+            key = "_pd_live_{}_{}".format(today, suffix)
+            if hour == h and not is_special_posted(posted, key):
+                send_prime_day_live(AMAZON_PARTNER_TAG)
+                mark_posted(posted, key)
+                save_posted(posted)
+                time.sleep(5)
 
-    if hour == 17 and not is_special_posted(posted, "_ab"):
-        send_audible_promo(AMAZON_PARTNER_TAG)
-        mark_posted(posted, "_ab")
-        save_posted(posted)
-        time.sleep(5)
-
-    if hour == 20 and not is_special_posted(posted, "_mu"):
-        send_music_promo(AMAZON_PARTNER_TAG)
-        mark_posted(posted, "_mu")
-        save_posted(posted)
-        time.sleep(5)
+    # PROMO REGOLARI (saltate durante Prime Day per non sovrapporsi)
+    if not pd_active:
+        if hour == 11 and not is_special_posted(posted, "_pr"):
+            send_prime_promo(AMAZON_PARTNER_TAG)
+            mark_posted(posted, "_pr")
+            save_posted(posted)
+            time.sleep(5)
+        if hour == 14 and not is_special_posted(posted, "_pv"):
+            send_prime_video_promo(AMAZON_PARTNER_TAG)
+            mark_posted(posted, "_pv")
+            save_posted(posted)
+            time.sleep(5)
+        if hour == 17 and not is_special_posted(posted, "_ab"):
+            send_audible_promo(AMAZON_PARTNER_TAG)
+            mark_posted(posted, "_ab")
+            save_posted(posted)
+            time.sleep(5)
+        if hour == 19 and not is_special_posted(posted, "_mu"):
+            send_music_promo(AMAZON_PARTNER_TAG)
+            mark_posted(posted, "_mu")
+            save_posted(posted)
+            time.sleep(5)
 
     if hour == 22 and not is_special_posted(posted, "_rc"):
         send_evening_recap(today)
@@ -782,7 +905,7 @@ def main():
         save_posted(posted)
         return
 
-    # ===== RICERCA OFFERTE A 5 FASI ORDINATE PER PRIORITA' EDITORIALE =====
+    # ===== RICERCA OFFERTE =====
     api = create_api()
     all_deals = []
     seen = set()
@@ -790,11 +913,10 @@ def main():
         for k in day_keys:
             if not k.startswith("_"):
                 seen.add(k)
-    log("[POOL] Skip lista: {} ASIN gia' visti".format(len(seen)))
+    log("[POOL] Skip: {} ASIN gia' visti".format(len(seen)))
 
-    # Helper per cercare
-    def search_phase(name, keywords, priority_filter=None):
-        log("=== FASE {}: {} keyword ===".format(name, len(keywords)))
+    def search_phase(name, keywords):
+        log("=== FASE {}: {} kw ===".format(name, len(keywords)))
         for kw in keywords:
             if len(all_deals) >= MAX_DEALS_POOL:
                 break
@@ -803,8 +925,6 @@ def main():
             for d in deals_found:
                 if d["asin"] in seen:
                     continue
-                if priority_filter and priority_filter(d):
-                    continue
                 if len(all_deals) >= MAX_DEALS_POOL:
                     break
                 seen.add(d["asin"])
@@ -812,9 +932,9 @@ def main():
                 all_deals.append(d)
                 new_count += 1
             if new_count > 0:
-                log("  [{}] -> {} nuovi".format(kw[:30], new_count))
+                log("  [{}] -> {}".format(kw[:35], new_count))
 
-    # FASE 1: Deal attivi (priorita' max)
+    # FASE 1: Deal attivi
     log("=== FASE 1: Deal Amazon attivi ===")
     for kw in DEAL_KEYWORDS:
         if len(all_deals) >= MAX_DEALS_POOL:
@@ -824,7 +944,7 @@ def main():
         for d in deals_found:
             if d["asin"] in seen:
                 continue
-            if not d.get("has_deal"):  # solo deal attivi qui
+            if not d.get("has_deal"):
                 continue
             seen.add(d["asin"])
             d["_kw"] = kw
@@ -833,60 +953,49 @@ def main():
             new_count += 1
         if new_count > 0:
             log("  [DEAL: {}] -> {}".format(kw, new_count))
-    log("[POOL] Dopo Fase 1: {} deal attivi".format(len(all_deals)))
+    log("[POOL] Dopo F1: {}".format(len(all_deals)))
 
-    # FASE 2: CASA/CUCINA
     search_phase("2 CASA/CUCINA", HOUSE_KITCHEN_KEYWORDS)
-    log("[POOL] Dopo Fase 2: {}".format(len(all_deals)))
+    log("[POOL] {}".format(len(all_deals)))
 
-    # FASE 3: MODA
     search_phase("3 MODA", FASHION_KEYWORDS)
-    log("[POOL] Dopo Fase 3: {}".format(len(all_deals)))
+    log("[POOL] {}".format(len(all_deals)))
 
-    # FASE 4: SPORT
     search_phase("4 SPORT", SPORT_KEYWORDS)
-    log("[POOL] Dopo Fase 4: {}".format(len(all_deals)))
+    log("[POOL] {}".format(len(all_deals)))
 
-    # FASE 5: BELLEZZA
     search_phase("5 BELLEZZA", BEAUTY_KEYWORDS)
-    log("[POOL] Dopo Fase 5: {}".format(len(all_deals)))
+    log("[POOL] {}".format(len(all_deals)))
 
-    # FASE 6: ELETTRONICA
     search_phase("6 ELETTRONICA", TECH_KEYWORDS)
-    log("[POOL] Dopo Fase 6: {}".format(len(all_deals)))
+    log("[POOL] {}".format(len(all_deals)))
 
-    # FASE 7: Sera o pool basso
-    if hour >= 19 and len(all_deals) < MAX_POSTS_PER_CYCLE * 5:
-        search_phase("7 EVENING FRESH", EVENING_KEYWORDS)
-        log("[POOL] Dopo Fase 7: {}".format(len(all_deals)))
+    if hour >= 19 and len(all_deals) < max_posts_cycle * 4:
+        search_phase("7 EVENING", EVENING_KEYWORDS)
 
-    log("=" * 50)
-    log("[POOL FINALE] {} offerte candidate".format(len(all_deals)))
+    log("=" * 60)
+    log("[POOL FINALE] {} candidati | max post ciclo: {}".format(len(all_deals), max_posts_cycle))
 
     if not all_deals:
-        log("[STOP] Pool vuoto. Niente da pubblicare.")
-        # AUTO-RECOVERY: se il pool e' vuoto per 3+ cicli, suggerisci reset memoria
+        log("[STOP] Pool vuoto.")
         return
 
-    # ===== ORDINAMENTO EDITORIALE =====
     all_deals.sort(key=get_editorial_priority)
 
-    # Log top 5 candidati
-    log("[TOP 5 candidati]:")
+    log("[TOP 5]:")
     for i, d in enumerate(all_deals[:5]):
         cat = get_deal_category(d["title"])
         score = get_editorial_priority(d)
-        brand_lbl = ["TOP", "GOOD", "?"][d.get('brand_prio', 2)]
-        log("  {}. score={} cat={} brand={} -{}% | {}".format(
-            i+1, score, cat, brand_lbl, d["discount_percent"], d["title"][:45]))
+        bp = ["TOP", "GOOD", "?"][d.get('brand_prio', 2)]
+        log("  {}. s={} {} {} -{}% | {}".format(
+            i+1, score, cat[:8], bp, d["discount_percent"], d["title"][:40]))
 
-    # Diversifica
     all_deals = diversify_deals(all_deals)
 
-    # ===== OFFERTA DEL GIORNO (>= 9) =====
+    # ===== TOP DEL GIORNO =====
     if hour >= 9 and not is_special_posted(posted, "_top"):
         best = max(all_deals, key=lambda d: d["discount_percent"])
-        log("[TOP DEL GIORNO] -{}% | {}".format(best["discount_percent"], best["title"][:50]))
+        log("[TOP] -{}% | {}".format(best["discount_percent"], best["title"][:50]))
         ok = send_telegram(format_deal(best, special="top"), best.get("image_url"), make_share_button(best["asin"]))
         if ok:
             mark_posted(posted, best["asin"])
@@ -896,40 +1005,36 @@ def main():
             all_deals.remove(best)
             log("[OK] Top pubblicato!")
             time.sleep(POST_INTERVAL_SECONDS)
-        else:
-            log("[FAIL] Top non pubblicato (Telegram error)")
 
-    # ===== PUBBLICA OFFERTE NORMALI =====
+    # ===== PUBBLICAZIONI =====
     pub = 0
-    log("[PUBLISH] Inizio loop pubblicazione (max {})".format(MAX_POSTS_PER_CYCLE))
+    log("[PUBLISH] max {} per ciclo (peak hour={})".format(max_posts_cycle, hour))
     for d in all_deals:
-        if pub >= MAX_POSTS_PER_CYCLE:
-            log("[STOP] Limite ciclo raggiunto: {}".format(pub))
+        if pub >= max_posts_cycle:
+            log("[STOP] Limite ciclo: {}".format(pub))
             break
         if not is_publish_time():
-            log("[STOP] Fuori orario")
             break
         if is_posted(posted, d["asin"]):
             continue
         dn = count_deals(posted) + 1
         sp = "flash" if d.get("has_deal") or d["discount_percent"] >= FLASH_DEAL_PERCENT else None
         cat = get_deal_category(d["title"])
-        log("[PUB #{}] {} -{}% | {}".format(dn, cat, d["discount_percent"], d["title"][:45]))
+        log("[PUB #{}] {} -{}% | {}".format(dn, cat, d["discount_percent"], d["title"][:40]))
         ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
         if ok:
             mark_posted(posted, d["asin"])
             save_posted(posted)
             save_deal_stat(d)
             pub += 1
-            log("  [OK] Pubblicato")
+            log("  [OK]")
             time.sleep(POST_INTERVAL_SECONDS)
         else:
-            log("  [FAIL] Non pubblicato (TG error)")
-            # Non incrementare pub, prova prossimo
+            log("  [FAIL]")
 
-    log("=" * 50)
-    log("[RIEPILOGO] Pubblicate {} in questo ciclo. Oggi totale: {}".format(pub, count_deals(posted)))
-    log("=" * 50)
+    log("=" * 60)
+    log("[RIEPILOGO] Pubblicate {} | Totale oggi: {}".format(pub, count_deals(posted)))
+    log("=" * 60)
 
 
 if __name__ == "__main__":
