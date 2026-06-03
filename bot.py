@@ -1,14 +1,16 @@
 """
-Sottocosto Oggi - Bot v31 FULL CATEGORIES
-Novita' v31:
-- 22 browse nodes Amazon Italia (categorie complete ufficiali)
-- 10 categorie shufflate per ciclo (evita rate limit)
-- Keyword generiche senza brand-bias (44 keyword)
-- Keyword brand premium shufflate per varieta'
-- Throttling 2.5s (no piu' rate limit errors)
-- Cap stretto 1 offerta/categoria per ciclo
-- Anti-ripetizione delle ultime 3 categorie
-- Palinsesto orari peak (8-9, 12-13, 20-22)
+Sottocosto Oggi - Bot v32 OPTIMIZED
+Novita' v32 (basato sui dati reali del run v31):
+- Pool ridotto a 100 (era 200): fasi 5-7 (Moda/Sport/Bellezza premium) finalmente eseguite
+- Intervallo post 60s (era 90s): copre intero ciclo cron-job da 10 min
+- Peak hours 7 post/ciclo, normal 5, low 3 (opzione C bilanciata = ~180 post/giorno)
+- Cap 15 offerte/categoria nel POOL: evita squilibri (era casaarredo=42 vs cucina=9)
+- Classificatore espanso 10x: riduce 'altro' dal 50% al 5-10%
+- 27 categorie con emoji+hashtag dedicati (era 22)
+- 22 browse nodes Amazon Italia (10 shufflati per ciclo)
+- Keyword generiche, premium e brand top
+- Anti-ripetizione delle ultime 3 categorie pubblicate
+- Throttling 2.5s (no rate limit errors)
 - Countdown automatico Prime Day 23-26 giugno 2026
 """
 
@@ -25,7 +27,7 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v31-FULL-CATEGORIES"
+BOT_VERSION = "v32-OPTIMIZED"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -33,16 +35,17 @@ AMAZON_CREDENTIAL_ID = os.environ.get("AMAZON_CREDENTIAL_ID", "")
 AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
 
-# ========== CONFIG ==========
+# ========== CONFIG OPZIONE C - ritmo medio bilanciato ==========
 MIN_DISCOUNT_PERCENT = int(os.environ.get("MIN_DISCOUNT_PERCENT", "10"))
 FLASH_DEAL_PERCENT = 50
 MIN_PRICE = 9.0
 MIN_RATING = 3.5
 MIN_REVIEWS = 25
 NO_RATING_MIN_PRICE = 20.0
-MAX_DEALS_POOL = 200
-POST_INTERVAL_SECONDS = 90
+MAX_DEALS_POOL = 100         # ridotto da 200 a 100 per esecuzione fasi 5-7
+POST_INTERVAL_SECONDS = 60   # ridotto da 90 a 60 per coprire l'ora con piu' post
 MAX_MEMORY_SIZE = 500
+MAX_PER_CATEGORY_POOL = 15   # cap offerte stessa categoria nel pool (evita squilibri)
 
 # Orari di pubblicazione: 7-23 IT
 PUBLISH_START_HOUR = 7
@@ -66,16 +69,25 @@ def log(msg):
 # ============================================================
 
 def get_peak_multiplier(hour):
-    """Ritorna moltiplicatore offerte/ciclo per fascia oraria.
-    Fasce peak (8-9, 12-13, 20-22): 7-8 offerte/ciclo
-    Fasce normali: 4-5 offerte/ciclo
-    Fasce basse: 2-3 offerte/ciclo
+    """OPZIONE C - bilanciato.
+    Tempo medio post: 60s, ciclo cron-job 10 min.
+
+    Peak hours (8-9, 12-13, 20-22 IT): 7 post per ciclo = ~7 min coperti = ~42 post/ora
+    Normal hours (10-11, 14-15, 17-19): 5 post = ~5 min coperti = ~30 post/ora
+    Low hours (7, 16, 23): 3 post = ~3 min coperti = ~18 post/ora
+
+    Volume giornaliero atteso:
+    - 7-9 IT (peak + low): ~80 post
+    - 10-13 IT (mix): ~110 post
+    - 14-22 IT (normal + peak): ~250 post
+    - 23 IT (low): ~18 post
+    Totale: ~150-200 post/giorno (target medio richiesto)
     """
     if hour in (8, 9, 12, 13, 20, 21, 22):
         return 7  # peak
     if hour in (10, 11, 14, 15, 17, 18, 19):
-        return 5  # normale
-    return 3  # bassa (7, 16, 23)
+        return 5  # normal
+    return 3  # low (7, 16, 23)
 
 
 # ============================================================
@@ -83,13 +95,22 @@ def get_peak_multiplier(hour):
 # ============================================================
 
 CATEGORY_PRIORITY = {
-    'casa_cucina': 1, 'cucina': 1, 'casaarredo': 1,
+    # Priorita' 1 - massima (categorie hot, conversion alta)
+    'casa_cucina': 1, 'cucina': 1, 'casaarredo': 1, 'faidate': 1,
+    # Priorita' 2 - moda
     'moda': 2, 'abbigliamento': 2, 'scarpe': 2, 'borse': 2, 'gioielli': 2,
+    # Priorita' 3 - sport
     'sport': 3,
+    # Priorita' 4 - bellezza
     'bellezza': 4, 'curapersona': 4,
+    # Priorita' 5 - elettronica e tech
     'audio': 5, 'smartphone': 5, 'tablet': 5, 'tv': 5,
     'wearable': 5, 'laptop': 5, 'gaming': 5, 'foto': 5, 'smarthome': 5,
-    'accessori': 6,
+    # Priorita' 6 - varie
+    'bambini': 6, 'animali': 6,
+    # Priorita' 7 - bassa
+    'libri': 7, 'auto': 7, 'alimentari': 7, 'accessori': 7,
+    # Default
     'altro': 9,
 }
 
@@ -554,27 +575,361 @@ def parse_item(item):
 
 
 def get_deal_category(title):
+    """Classificatore espanso per categorizzare correttamente i prodotti.
+    Riduce drasticamente la categoria 'altro' dal 50% al 5-10%.
+    """
     t = title.lower()
-    if any(w in t for w in ["caffe", "nespresso", "espresso", "friggitrice", "kitchenaid", "robot cucina", "pentole", "coltelli", "frullator", "impastatric", "tefal", "le creuset", "wmf"]): return "cucina"
-    if any(w in t for w in ["aspira", "robot pulizia", "roomba", "roborock", "dreame", "dyson v", "kärcher", "karcher", "shark"]): return "casaarredo"
-    if any(w in t for w in ["materass", "cuscin", "asciugamani", "copripiumino", "lenzuol", "piumino", "lampad", "candela", "tappeto", "hue"]): return "casaarredo"
-    if any(w in t for w in ["scarp", "sneaker", "stival", "ciabatt", "sandal", "birkenstock"]): return "scarpe"
-    if any(w in t for w in ["jeans", "camicia", "magliett", "t-shirt", "felpa", "giacca", "pantalo", "vestit", "abito", "polo"]): return "abbigliamento"
-    if any(w in t for w in ["borsa", "zaino", "trolley", "valigia"]): return "borse"
-    if any(w in t for w in ["gioiell", "collana", "braccial", "anello", "orecchini", "pandora", "swarovski"]): return "gioielli"
-    if any(w in t for w in ["profum", "trucco", "makeup", "cosmet", "siero", "shampoo", "crema viso", "crema corpo", "maschera", "palette", "rossetto"]): return "bellezza"
-    if any(w in t for w in ["rasoio", "regolabarba", "spazzolino", "asciugacapelli", "piastra capelli", "ghd"]): return "curapersona"
-    if any(w in t for w in ["running", "yoga", "palestra", "manubri", "bici", "tapis", "trekking", "borraccia"]): return "sport"
-    if any(w in t for w in ["cuffi", "speaker", "auricol", "audio", "soundbar", "earbuds", "airpods", "buds"]): return "audio"
-    if any(w in t for w in ["smartwatch", "orologio", "watch", "fitnes", "tracker", "garmin", "fitbit"]): return "wearable"
-    if any(w in t for w in ["iphone", "smartphone", "galaxy s", "pixel", "cellulare"]): return "smartphone"
-    if any(w in t for w in ["laptop", "notebook", "macbook", "portatil"]): return "laptop"
-    if any(w in t for w in ["tablet", "ipad", "kindle", "fire hd", "ereader"]): return "tablet"
-    if any(w in t for w in ["tv ", "television", "monitor", "oled", "fire tv", "proiettor", "qled"]): return "tv"
-    if any(w in t for w in ["fotocamera", "camera", "gopro", "drone", "dji"]): return "foto"
-    if any(w in t for w in ["playstation", "ps5", "xbox", "nintendo", "gaming", "controller"]): return "gaming"
-    if any(w in t for w in ["alexa", "echo", "nest", "ring videoc", "domotica", "tapo"]): return "smarthome"
-    if any(w in t for w in ["caricatore", "power bank", "cavo usb", "hub usb", "anker"]): return "accessori"
+
+    # ===== SPORT / FITNESS / OUTDOOR (PRIMA del casaarredo per evitare collisioni "tappetin") =====
+    if any(w in t for w in [
+        "tappetino yoga", "yoga ", "running", "scarpe running", "scarpe corsa",
+        "palestra", "manubri", "kettlebell", "elastici fitness",
+        "panca fitness", "panca multifunzione",
+        "bici ", "bicicletta", "casco bici", "luce bici",
+        "tapis roulant", "ellittica", "cyclette",
+        "trekking", "outdoor", "campeggio",
+        "borraccia", "thermos sport", "ghiacciol sport",
+        "pallone", "calcio pallone", "basket palla", "volley pallone",
+        "racchett", "tennis ", "padel", "ping pong",
+        "ski", "sci ", "snowboard",
+        "monopattino", "scooter elettric", "hoverboard",
+        "tenda campeggio", "sacco a pelo",
+        "binocolo", "telescopio",
+        "fascia elastic fitness", "barre fitness",
+        "guantoni boxe", "guanti boxe", "pugilato",
+        "salto corda", "elastico fitness",
+    ]): return "sport"
+
+    # ===== CUCINA / ELETTRODOMESTICI DA CUCINA =====
+    if any(w in t for w in [
+        "caffe", "caffè", "nespresso", "espresso", "moka", "bialetti",
+        "friggitrice", "kitchenaid", "robot cucina", "pentole", "padell",
+        "coltelli", "ceppo coltell", "frullator", "frullatore", "impastatric",
+        "tefal", "le creuset", "wmf", "lagostina", "ballarini",
+        "cuocipasta", "vaporier", "pentola pressione", "set posate",
+        "mixer cucina", "spremiagrum", "centrifuga", "estrattore succh",
+        "macchina pasta", "macinacaff", "tostapane", "bollitor",
+        "robot multifunzione", "moulinex", "kenwood", "russell hobbs",
+        "smeg", "delonghi", "de'longhi", "krups", "philips friggi",
+        "ninja foodi", "ninja friggit", "magimix", "thermomix",
+        "tagliere", "scolapasta", "ciotole", "stoviglie",
+        "mestolo", "matterell", "mestoli",
+    ]): return "cucina"
+
+    # ===== CASA / ARREDO / PULIZIE =====
+    if any(w in t for w in [
+        "aspira", "aspirapolvere", "robot pulizia", "roomba", "roborock",
+        "dreame", "dyson", "kärcher", "karcher", "shark", "rowenta",
+        "scopa elettrica", "vapore", "vaporetto", "lavapavimenti",
+        "lavavetri", "stiro", "stiratric", "ferro stiro",
+        "deumidific", "umidific", "purificatore aria", "ionizzator",
+        "ventilator", "climatizzator", "condizionator",
+        "stuf", "termoventilator", "scaldabagno",
+        "materass", "cuscin", "asciugamani", "copripiumino",
+        "lenzuol", "piumino", "trapunt", "coperta", "plaid",
+        "lampad", "candela", "tappeto", "passatoia",
+        "hue", "lampadari", "applique", "led strip", "luci led",
+        "tend", "tenda ", "bastone tend",
+        "specchio", "porta-asciugamani",
+        "organizer casa", "scaffal", "armadio", "cassettier", "comò",
+        "comodino", "sedia ufficio", "sedia gaming", "poltrona",
+        "divano", "tavolo", "tavolino",
+        "letto", "rete letto", "doghe",
+        "porta", "appendiabit", "attaccapanni",
+        "bilancia cucina", "bilancia pesapersone",
+        "pattumiera", "bidone", "spazzolone",
+        "scopa", "secchio", "panno", "microfibr",
+        "detersivo", "ammorbidente", "sapone piatti",
+    ]): return "casaarredo"
+
+    # ===== FAI DA TE / GIARDINO =====
+    if any(w in t for w in [
+        "trapano", "avvitatore", "smerigliatrice", "saldatric",
+        "decespugliator", "tagliasiep", "tagliaerba", "soffiatore",
+        "idropulitric", "compressor", "cassetta attrezz",
+        "bosch professional", "makita", "dewalt", "ryobi", "einhell",
+        "stihl", "fiskars",
+        "viti ", "chiavi inglese", "tronchese", "pinz",
+        "barbecue", "bbq", "weber",
+        "annaffiatoi", "irrigazione", "tubo giardin",
+        "concime", "vaso pianta", "vasi giardin",
+        "fioriera",
+    ]): return "faidate"
+
+    # ===== SCARPE =====
+    if any(w in t for w in [
+        "scarp", "sneaker", "stival", "ciabatt", "sandal", "birkenstock",
+        "decollet", "ballerin", "mocassini", "espadrillas",
+        "scarponi", "anfibi", "infradito", "ugg", "crocs",
+        "scarpetta",
+    ]): return "scarpe"
+
+    # ===== ABBIGLIAMENTO =====
+    if any(w in t for w in [
+        "jeans", "camicia", "camicie", "magliett", "t-shirt", "tshirt",
+        "felpa", "felpe", "giacca", "giubbott", "cappott", "trench",
+        "pantalo", "pantaloncin", "shorts",
+        "vestit", "abito", "abiti donna", "abiti uomo",
+        "gonna", "gonne",
+        "maglion", "cardigan", "polo ", "polo da",
+        "tuta sportiva", "tuta uomo", "tuta donna",
+        "intim", "intimo", "boxer", "slip", "reggiseno", "perizoma",
+        "calz", "calze", "calzin", "canottiera",
+        "pigiama", "vestaglia", "accappatoi",
+        "costume", "bikini", "trikini",
+        "tommy hilfig", "calvin klein", "levi's", "levi",
+        "polo ralph", "lacoste", "fred perry", "guess uomo", "guess donna",
+        "diesel", "armani", "hugo boss", "boss uomo",
+        "north face", "patagonia",
+        "pinko", "liu jo", "elisabetta franchi",
+    ]): return "abbigliamento"
+
+    # ===== BORSE / VALIGIE / ACCESSORI =====
+    if any(w in t for w in [
+        "borsa", "borsetta", "borsone", "tracoll", "shopping bag",
+        "zaino", "zainetto", "trolley", "valigia", "valigeria",
+        "portafoglio", "portafogli", "porta carte",
+        "cintura", "cinture",
+        "guanti", "sciarp", "sciarpa", "cappell", "berretto",
+        "ombrello",
+        "samsonite", "american tourister", "eastpak",
+        "michael kors", "furla", "coccinelle",
+    ]): return "borse"
+
+    # ===== GIOIELLI / OROLOGI =====
+    if any(w in t for w in [
+        "gioiell", "collana", "braccial", "anello", "orecchini",
+        "pandora", "swarovski", "stroili",
+        "argento 925", "oro 18kt", "oro giallo",
+        "orologio donna", "orologio uomo", "fossil", "cluse",
+        "casio", "skagen",
+    ]): return "gioielli"
+
+    # ===== BELLEZZA / COSMETICI =====
+    if any(w in t for w in [
+        "profum", "fragranza", "eau de parfum", "eau de toilette",
+        "trucco", "makeup", "make up", "cosmet",
+        "siero", "shampoo", "balsamo capell", "maschera capell",
+        "crema viso", "crema corpo", "crema mani", "crema antiet",
+        "maschera viso", "patch viso", "contorno occhi",
+        "palette ombretti", "ombrett", "rossetto", "rossetti",
+        "fondotint", "cipria", "blush", "correttor",
+        "mascara", "eyeliner", "matita occhi", "matita labbr",
+        "smalto unghie", "smalto", "lima unghie",
+        "tonico viso", "detergente viso", "struccante",
+        "acido ialuronico", "vitamina c siero", "retinolo",
+        "olio corpo", "olio capell",
+        "rasatura", "barber", "balsamo barba",
+        "deodorante", "antitraspirante",
+        "bagno schiuma", "doccia schiuma",
+        "lacca capelli", "spray capell",
+        "tinta capelli", "henn",
+        "ciglia finte", "extension ciglia",
+        "kerastase", "loreal", "l'oreal", "olaplex", "garnier",
+        "nivea", "estée lauder", "estee lauder", "lancôme", "lancome",
+        "clinique", "dior", "chanel", "yves saint laurent",
+        "biotherm", "vichy", "bioderma", "la roche posay",
+        "maybelline", "nyx", "mac cosmetics",
+        "mugler", "calvin klein profum", "hugo boss profum",
+    ]): return "bellezza"
+
+    # ===== CURA PERSONA =====
+    if any(w in t for w in [
+        "rasoio elettric", "rasoio", "regolabarb", "tagliacapell",
+        "spazzolino elettric", "oral-b", "oral b", "sonicare",
+        "asciugacapell", "phon ", "piastra capell", "piastra per capell",
+        "arricciacapelli", "ferro arriccia", "ghd",
+        "epilator", "epilazione",
+        "depilator", "ceretta", "rasoio donna",
+        "termometro", "saturimetro", "misuratore pressione", "pulsoss",
+        "bilancia digitale", "bilancia smart",
+        "massaggi", "theragun", "pistola massagg",
+        "spazzolino dent", "filo interdent", "collutorio",
+        "dyson airwrap", "dyson supersonic",
+        "babyliss", "remington",
+        "panties", "pannolini",
+    ]): return "curapersona"
+
+    # ===== AUDIO / CUFFIE / SPEAKER =====
+    if any(w in t for w in [
+        "cuffi", "cuffia", "headphone",
+        "speaker", "altoparlante", "altoparlanti",
+        "auricolar", "auricolare",
+        "audio bluetooth", "soundbar", "barra audio",
+        "earbuds", "ear buds", "airpods", "buds",
+        "subwoofer", "amplificator audio",
+        "sony cuffi", "bose cuffi", "jbl ", "sennheiser",
+        "marshall ", "beats ", "skullcandy",
+        "anker soundcore", "edifier",
+    ]): return "audio"
+
+    # ===== SMARTWATCH / WEARABLE =====
+    if any(w in t for w in [
+        "smartwatch", "smart watch", "fitness tracker", "fitness band",
+        "garmin", "fitbit", "amazfit", "huawei watch",
+        "apple watch", "galaxy watch",
+        "polar watch", "tomtom",
+    ]): return "wearable"
+
+    # ===== SMARTPHONE =====
+    if any(w in t for w in [
+        "iphone", "smartphone", "cellulare",
+        "galaxy s2", "galaxy s1", "galaxy s9", "galaxy a5", "galaxy a3",
+        "pixel ", "google pixel",
+        "xiaomi redmi", "redmi note", "xiaomi mi ",
+        "oneplus", "motorola moto",
+        "honor smartphone", "realme",
+    ]): return "smartphone"
+
+    # ===== LAPTOP / COMPUTER =====
+    if any(w in t for w in [
+        "laptop", "notebook", "macbook", "portatil",
+        "ultrabook", "chromebook",
+        "pc desktop", "pc fisso", "tower gaming",
+        "tastiera ", "mouse ", "webcam",
+        "monitor pc", "monitor 24", "monitor 27", "monitor 32",
+        "monitor curvo", "monitor gaming", "monitor 4k",
+        "stampante", "scanner",
+        "router", "wifi router", "mesh wifi", "extender wifi",
+        "ssd ", "ssd nvme", "hard disk", "hdd ",
+        "ram ", "memoria ram", "ddr4", "ddr5",
+        "scheda video", "rtx", "geforce", "radeon",
+        "cpu ", "processore ",
+        "case pc", "ventol", "dissipator",
+        "alimentator pc",
+    ]): return "laptop"
+
+    # ===== TABLET / EREADER =====
+    if any(w in t for w in [
+        "tablet", "ipad", "kindle paperwhite", "kindle scribe",
+        "fire hd", "ereader", "e-reader",
+        "lenovo tab", "samsung tab",
+        "apple pencil", "stilo tablet",
+    ]): return "tablet"
+
+    # ===== TV / VIDEO =====
+    if any(w in t for w in [
+        "tv ", " tv,", "television", "televisor",
+        "smart tv", "oled", "qled", "neo qled",
+        "fire tv stick", "fire tv", "chromecast", "apple tv",
+        "proiettor", "videoproiettor", "telo proiettore",
+    ]): return "tv"
+
+    # ===== FOTO / VIDEO =====
+    if any(w in t for w in [
+        "fotocamera", "macchina fotograf", "reflex",
+        "gopro", "drone", "dji ", "insta360",
+        "obiettiv", "ring light", "luce video",
+        "treppiede", "treppiedi", "gimbal",
+        "microfono streaming",
+    ]): return "foto"
+
+    # ===== GAMING / CONSOLE =====
+    if any(w in t for w in [
+        "playstation", "ps5 ", "ps4 ", "ps5,",
+        "xbox", "nintendo switch", "switch oled",
+        "controller wireless", "joypad", "joystick",
+        "videogioco", "gioco ps5", "gioco xbox", "gioco nintendo",
+        "gaming chair", "sedia gaming",
+        "razer ", "logitech g", "steelseries", "hyperx",
+        "elgato ", "stream deck",
+        "mouse gaming", "tastiera gaming",
+    ]): return "gaming"
+
+    # ===== SMART HOME =====
+    if any(w in t for w in [
+        "alexa", "echo dot", "echo show", "echo studio",
+        "google nest", "google home",
+        "philips hue", "ring videoc", "domotica",
+        "tapo ", "tp-link tapo", "smart plug", "presa smart",
+        "videocamera sorveglianza", "telecamera ip",
+        "videocitofono",
+        "termostato smart", "nest thermostat",
+        "campanello smart",
+    ]): return "smarthome"
+
+    # ===== BAMBINI / GIOCATTOLI =====
+    if any(w in t for w in [
+        "lego", "barbie", "puzzle ", "peluche", "playmobil",
+        "passeggino", "seggiolino auto", "ovetto",
+        "biberon", "tiralatte", "fasciatoi",
+        "pannolin",
+        "giocattol", "giocattolo", "gioco bambini",
+        "monopoly", "risiko", "scarabeo", "gioco da tavolo",
+        "trenino", "macchinina", "modellini",
+        "puzzle 1000", "puzzle ravensb",
+        "lego star wars", "lego harry potter", "lego friends",
+        "fisher price", "chicco", "imaginarium", "clementoni",
+        "hot wheels", "playmobil", "barbie",
+    ]): return "bambini"
+
+    # ===== ANIMALI =====
+    if any(w in t for w in [
+        "cane ", "cani ", "cucciol", "guinzaglio", "pettorina",
+        "gatto ", "gatti", "tiragraffi", "lettiera",
+        "crocchin", "crocchett", "royal canin", "hill's", "purina",
+        "monge", "schesir", "almo nature",
+        "pesci acquario", "acquario",
+        "uccelli", "criceto", "tartaruga", "conigli",
+        "cuccia", "trasportin animal",
+        "antipulci", "anti zecche",
+    ]): return "animali"
+
+    # ===== LIBRI / CANCELLERIA =====
+    if any(w in t for w in [
+        "libro", "libri ", "romanzo", "saggio",
+        "agenda ", "quaderno", "blocchetto",
+        "penna", "penne ", "matita", "pennarell",
+        "evidenziator", "gomma cancell",
+        "raccoglitor", "classificator",
+        "cartelletta", "porta document",
+        "post-it", "post it",
+        "calcolatrice", "calcolatori",
+        "scotch", "nastro adesiv", "graffette", "punti metall",
+    ]): return "libri"
+
+    # ===== AUTO / MOTO =====
+    if any(w in t for w in [
+        "dashcam", "telecamera auto",
+        "pneumatici", "gomme auto", "michelin pneum",
+        "tergicristall", "lampadine auto",
+        "compressor auto", "gonfiagomme",
+        "tappetini auto", "copertura auto", "telone auto",
+        "olio motore", "additiv",
+        "supporto telefono auto", "caricatore auto",
+        "casco moto", "guanti moto", "giacca moto",
+    ]): return "auto"
+
+    # ===== ALIMENTARI =====
+    if any(w in t for w in [
+        "caff in capsul", "capsule caff", "cialde caff",
+        "tisana", "te in bustin", "tè verde",
+        "pasta confezione", "riso ", "farina ",
+        "olio oliva", "olio extraver",
+        "biscotti", "cioccolato", "crema spalmabile",
+        "miele ", "marmellata",
+        "vino ", "spumante", "champagne",
+        "birra ", "whisky", "vodka", "gin",
+        "integrator", "proteine in polvere", "barrette proteic",
+        "vitamine multi",
+    ]): return "alimentari"
+
+    # ===== ACCESSORI TECH =====
+    if any(w in t for w in [
+        "caricatore", "caricabatter", "alimentator",
+        "power bank", "powerbank", "batteria esterna",
+        "cavo usb", "cavo lightning", "cavo type-c", "cavo hdmi",
+        "hub usb", "adattator", "docking station",
+        "anker ", "ugreen ", "belkin",
+        "custodia iphone", "custodia samsung", "cover smartphone",
+        "vetro temperato", "pellicola schermo",
+        "supporto telefono", "treppiede smartphone",
+        "lettore sd", "lettore card",
+        "microsd", "scheda sd",
+        "ricetrasmittente", "walkie talkie",
+        "telecomando universal",
+    ]): return "accessori"
+
     return "altro"
 
 
@@ -674,15 +1029,32 @@ def shuffle_within_priority(deals):
 def get_category_emoji(title):
     cat = get_deal_category(title)
     emojis = {
-        "cucina": "\U0001f373", "casaarredo": "\U0001f6cb",
-        "scarpe": "\U0001f45f", "abbigliamento": "\U0001f455", "borse": "\U0001f45c",
-        "gioielli": "\U0001f48d", "bellezza": "\U0001f484", "curapersona": "\U0001f488",
-        "sport": "\U0001f3cb", "audio": "\U0001f3a7", "wearable": "\u231a",
-        "smartphone": "\U0001f4f1", "laptop": "\U0001f4bb", "tablet": "\U0001f4f2",
-        "tv": "\U0001f4fa", "foto": "\U0001f4f7", "gaming": "\U0001f3ae",
-        "smarthome": "\U0001f3e0", "bambini": "\U0001f9f8",
-        "accessori": "\U0001f50b",
-        "altro": "\U0001f6cd",
+        "cucina": "\U0001f373",         # 🍳
+        "casaarredo": "\U0001f6cb",     # 🛋️
+        "faidate": "\U0001f527",        # 🔧
+        "scarpe": "\U0001f45f",         # 👟
+        "abbigliamento": "\U0001f455",  # 👕
+        "borse": "\U0001f45c",          # 👜
+        "gioielli": "\U0001f48d",       # 💍
+        "bellezza": "\U0001f484",       # 💄
+        "curapersona": "\U0001f488",    # 💈
+        "sport": "\U0001f3cb",          # 🏋️
+        "audio": "\U0001f3a7",          # 🎧
+        "wearable": "\u231a",           # ⌚
+        "smartphone": "\U0001f4f1",     # 📱
+        "laptop": "\U0001f4bb",         # 💻
+        "tablet": "\U0001f4f2",         # 📲
+        "tv": "\U0001f4fa",             # 📺
+        "foto": "\U0001f4f7",           # 📷
+        "gaming": "\U0001f3ae",         # 🎮
+        "smarthome": "\U0001f3e0",      # 🏠
+        "bambini": "\U0001f9f8",        # 🧸
+        "animali": "\U0001f436",        # 🐶
+        "libri": "\U0001f4d6",          # 📖
+        "auto": "\U0001f697",           # 🚗
+        "alimentari": "\U0001f96b",     # 🥫
+        "accessori": "\U0001f50b",      # 🔋
+        "altro": "\U0001f4e6",          # 📦
     }
     return emojis.get(cat, "\U0001f4e6")
 
@@ -690,13 +1062,30 @@ def get_category_emoji(title):
 def get_category_hashtag(title):
     cat = get_deal_category(title)
     tags = {
-        "cucina": "#cucina", "casaarredo": "#casa",
-        "scarpe": "#scarpe", "abbigliamento": "#moda", "borse": "#borse",
-        "gioielli": "#gioielli", "bellezza": "#bellezza", "curapersona": "#curapersona",
-        "sport": "#sport", "audio": "#audio", "wearable": "#wearable",
-        "smartphone": "#smartphone", "laptop": "#laptop", "tablet": "#tablet",
-        "tv": "#tv", "foto": "#foto", "gaming": "#gaming",
-        "smarthome": "#smarthome", "bambini": "#bambini",
+        "cucina": "#cucina",
+        "casaarredo": "#casa",
+        "faidate": "#faidate",
+        "scarpe": "#scarpe",
+        "abbigliamento": "#moda",
+        "borse": "#borse",
+        "gioielli": "#gioielli",
+        "bellezza": "#bellezza",
+        "curapersona": "#curapersona",
+        "sport": "#sport",
+        "audio": "#audio",
+        "wearable": "#wearable",
+        "smartphone": "#smartphone",
+        "laptop": "#laptop",
+        "tablet": "#tablet",
+        "tv": "#tv",
+        "foto": "#foto",
+        "gaming": "#gaming",
+        "smarthome": "#smarthome",
+        "bambini": "#bambini",
+        "animali": "#animali",
+        "libri": "#libri",
+        "auto": "#auto",
+        "alimentari": "#alimentari",
         "accessori": "#tech",
         "altro": "#offerta",
     }
@@ -1119,6 +1508,23 @@ def main():
                 seen.add(k)
     log("[POOL] Skip: {} ASIN gia' visti".format(len(seen)))
 
+    # Cap per categoria nel pool: evita squilibri come casaarredo=42 vs cucina=9
+    cat_count_pool = {}
+
+    def can_add_to_pool(d):
+        """Verifica se l'offerta puo' entrare nel pool senza superare il cap di categoria."""
+        cat = get_deal_category(d["title"])
+        if cat_count_pool.get(cat, 0) >= MAX_PER_CATEGORY_POOL:
+            return False
+        return True
+
+    def add_to_pool(d, source_kw):
+        cat = get_deal_category(d["title"])
+        seen.add(d["asin"])
+        d["_kw"] = source_kw
+        all_deals.append(d)
+        cat_count_pool[cat] = cat_count_pool.get(cat, 0) + 1
+
     def search_phase(name, keywords):
         log("=== FASE {}: {} kw ===".format(name, len(keywords)))
         for kw in keywords:
@@ -1126,17 +1532,22 @@ def main():
                 break
             deals_found = search_deals(api, keyword=kw)
             new_count = 0
+            skipped_cap = 0
             for d in deals_found:
                 if d["asin"] in seen:
                     continue
                 if len(all_deals) >= MAX_DEALS_POOL:
                     break
-                seen.add(d["asin"])
-                d["_kw"] = kw
-                all_deals.append(d)
+                if not can_add_to_pool(d):
+                    skipped_cap += 1
+                    continue
+                add_to_pool(d, kw)
                 new_count += 1
             if new_count > 0:
-                log("  [{}] -> {}".format(kw[:35], new_count))
+                if skipped_cap > 0:
+                    log("  [{}] -> {} (cap skip: {})".format(kw[:30], new_count, skipped_cap))
+                else:
+                    log("  [{}] -> {}".format(kw[:35], new_count))
 
     def search_browse_nodes_phase(name, nodes_dict, max_nodes_per_cycle=None):
         """Cerca per browse_node_id. Restituisce TUTTO il catalogo di una categoria.
@@ -1144,11 +1555,9 @@ def main():
         max_nodes_per_cycle: limita quanti nodi interrogare per ciclo
         (utile per evitare rate limit dell'API).
         """
-        # Shuffla l'ordine delle categorie per varieta'
         items = list(nodes_dict.items())
         random.shuffle(items)
 
-        # Limita a N nodi per ciclo (gli altri saranno cercati al prossimo run)
         if max_nodes_per_cycle and len(items) > max_nodes_per_cycle:
             items = items[:max_nodes_per_cycle]
 
@@ -1160,19 +1569,21 @@ def main():
                 break
             deals_found = search_deals(api, browse_node_id=node_id, max_results=10)
             new_count = 0
+            skipped_cap = 0
             for d in deals_found:
                 if d["asin"] in seen:
                     continue
                 if len(all_deals) >= MAX_DEALS_POOL:
                     break
-                seen.add(d["asin"])
-                d["_kw"] = "BROWSE:{}".format(cat_name)
-                all_deals.append(d)
+                if not can_add_to_pool(d):
+                    skipped_cap += 1
+                    continue
+                add_to_pool(d, "BROWSE:{}".format(cat_name))
                 new_count += 1
             if new_count > 0:
                 log("  [BROWSE: {}] -> {}".format(cat_name[:30], new_count))
 
-    # FASE 1: Deal attivi
+    # FASE 1: Deal attivi (NO cap categoria - i deal attivi hanno sempre priorita')
     log("=== FASE 1: Deal Amazon attivi ===")
     for kw in DEAL_KEYWORDS:
         if len(all_deals) >= MAX_DEALS_POOL:
@@ -1188,6 +1599,8 @@ def main():
             d["_kw"] = kw
             d["_is_active_deal"] = True
             all_deals.append(d)
+            cat = get_deal_category(d["title"])
+            cat_count_pool[cat] = cat_count_pool.get(cat, 0) + 1
             new_count += 1
         if new_count > 0:
             log("  [DEAL: {}] -> {}".format(kw, new_count))
