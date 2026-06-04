@@ -1,16 +1,19 @@
 """
-Sottocosto Oggi - Bot v33 BOOST DINAMICO
-Novita' v33 (basato sui dati del run v32):
-- Pool 130 (era 100): brand premium FINALMENTE eseguiti
-- Intervallo post 50s (era 60s): copre 9-10 min/ciclo
-- Peak/Normal/Low: 8/6/4 base + fino a 3 WOW extra
-- BOOST WOW: offerte sconto >=50% OPPURE brand TOP >=30% bypass del limite normale
-- Volume target: ~210-230 post/giorno (era 180)
-- Cap categoria nel pool a 18 (era 15)
-- Brand premium PRIMA delle generic (KitchenAid, Tommy, Nike, L'Oreal pescati per primi)
+Sottocosto Oggi - Bot v34 BRANDED IMAGES
+Novita' v34:
+- IMMAGINI BRANDATE CUSTOM per offerte WOW + Offerta del Giorno
+- Stile v6.0 minimal: bianco, rosso, oro (coerente con storia/post IG)
+- 1080x1080 quadrato: logo SOTTOCOSTO•OGGI, badge sconto rosso,
+  card prodotto con ombra, prezzo barrato, risparmi verde, handle bottom
+- Fallback automatico su immagine Amazon se generazione fallisce
+- richiede modulo post_image_module.py nel repository
+
+Inerita da v33:
+- Pool 130, intervallo 50s, peak/normal/low 8/6/4 + WOW boost +3
+- BOOST WOW: offerte sconto >=50% OPPURE brand TOP >=30%
+- Brand premium PRIMA delle generic
 - Lookup brand -> categoria (Vans -> scarpe, Tommy -> abbigliamento)
-- Anti-ripetizione delle ultime 3 categorie
-- Throttling 2.5s (no rate limit errors)
+- 27 categorie classificatore, 22 browse nodes Amazon Italia
 - Countdown automatico Prime Day 23-26 giugno 2026
 """
 
@@ -27,7 +30,15 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v33-BOOST-DINAMICO"
+BOT_VERSION = "v34-BRANDED-IMAGES"
+
+# Modulo grafiche custom per offerte WOW (opzionale, fallback se non disponibile)
+try:
+    from post_image_module import generate_post_image
+    BRANDED_IMAGES_ENABLED = True
+except ImportError:
+    BRANDED_IMAGES_ENABLED = False
+    print("[WARN] post_image_module non trovato. Grafiche brandate disabilitate.")
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
@@ -1382,6 +1393,49 @@ def send_telegram(text, image_url=None, reply_markup=None):
         return False
 
 
+def send_telegram_branded(text, deal, reply_markup=None):
+    """Invia un post Telegram con immagine BRANDATA custom (per offerte WOW).
+    Fallback automatico su send_telegram con image_url se la generazione fallisce.
+    """
+    if not BRANDED_IMAGES_ENABLED:
+        return send_telegram(text, deal.get("image_url"), reply_markup)
+
+    try:
+        import tempfile
+        # Genera l'immagine brandata in un file temporaneo
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+        success = generate_post_image(deal, tmp_path)
+        if not success:
+            log("  [BRAND_FAIL] fallback su immagine Amazon")
+            return send_telegram(text, deal.get("image_url"), reply_markup)
+
+        # Invia immagine come file
+        base = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
+        with open(tmp_path, "rb") as f:
+            files = {"photo": ("post.png", f, "image/png")}
+            data = {"chat_id": TELEGRAM_CHANNEL_ID, "caption": text, "parse_mode": "HTML"}
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup)
+            r = requests.post("{}/sendPhoto".format(base), data=data, files=files, timeout=30)
+            j = r.json()
+
+        # Cleanup
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        if j.get("ok"):
+            log("  [BRANDED] immagine custom inviata")
+            return True
+        log("  [TG_FAIL] branded: {}".format(j.get("description", "??")))
+        return send_telegram(text, deal.get("image_url"), reply_markup)
+    except Exception as e:
+        log("  [BRAND_ERR] {} - fallback".format(e))
+        return send_telegram(text, deal.get("image_url"), reply_markup)
+
+
 def make_share_button(asin):
     u = "https://t.me/share/url?url={}&text={}".format(
         requests.utils.quote("https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)),
@@ -1963,11 +2017,16 @@ def main():
         cat = get_deal_category(d["title"])
         log("  {}. {} | {}".format(i+1, cat[:10], d["title"][:50]))
 
-    # ===== TOP DEL GIORNO =====
+    # ===== TOP DEL GIORNO (con immagine BRANDATA) =====
     if hour >= 9 and not is_special_posted(posted, "_top"):
         best = max(all_deals, key=lambda d: d["discount_percent"])
         log("[TOP] -{}% | {}".format(best["discount_percent"], best["title"][:50]))
-        ok = send_telegram(format_deal(best, special="top"), best.get("image_url"), make_share_button(best["asin"]))
+        # Offerta del Giorno = sempre immagine brandata
+        ok = send_telegram_branded(
+            format_deal(best, special="top"),
+            best,
+            make_share_button(best["asin"])
+        )
         if ok:
             mark_posted(posted, best["asin"])
             mark_posted(posted, "_top")
@@ -2055,7 +2114,12 @@ def main():
         wow_tag = " 🔥WOW" if is_wow and pub >= max_posts_cycle else ""
         log("[PUB #{}{}] {} -{}% | {}".format(
             dn, wow_tag, cat, d["discount_percent"], d["title"][:40]))
-        ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
+
+        # IMMAGINE BRANDATA SOLO per offerte WOW (sconto >=50% o brand TOP >=30%)
+        if is_wow:
+            ok = send_telegram_branded(format_deal(d, dn, sp), d, make_share_button(d["asin"]))
+        else:
+            ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
         if ok:
             mark_posted(posted, d["asin"])
             save_posted(posted)
