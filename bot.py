@@ -1,19 +1,25 @@
 """
-Sottocosto Oggi - Bot v34 BRANDED IMAGES
-Novita' v34:
-- IMMAGINI BRANDATE CUSTOM per offerte WOW + Offerta del Giorno
-- Stile v6.0 minimal: bianco, rosso, oro (coerente con storia/post IG)
-- 1080x1080 quadrato: logo SOTTOCOSTO•OGGI, badge sconto rosso,
-  card prodotto con ombra, prezzo barrato, risparmi verde, handle bottom
-- Fallback automatico su immagine Amazon se generazione fallisce
-- richiede modulo post_image_module.py nel repository
+Sottocosto Oggi - Bot v35 ANTI-REPEAT + TECH PRIORITY
+Novita' v35:
+- ANTI-REPEAT con CHECK PREZZO: memoria estesa 14 giorni; se ASIN gia' pubblicato
+  e prezzo NON cambiato (variazione <5%) -> SKIP. Se prezzo cambiato -> RIPROPOSTA
+  con tag 💹PRICE-DROP nel log
+- SMARTPHONE come fase dedicata garantita (era assente!)
+  Keyword: iPhone 15/14, Galaxy S24/A55/Z, Pixel 8/9, Xiaomi, OnePlus...
+- TECH premium garantita (audio/laptop/tablet/TV/gaming/wearable/foto)
+  Keyword espanse: Sony WH-1000XM5, AirPods Pro, MacBook M3, iPad Pro,
+  Apple Watch, PS5, Nintendo Switch OLED, GoPro, DJI...
+- Pool aumentato a 160 (era 130) per dare spazio a tutte le fasi
+- Fasi ricerca riorganizzate: 1=Deal, 2=Cucina, 3=Moda, 4=Sport, 5=Bellezza,
+  6=Smartphone, 7=Tech, 8=Browse Nodes, 9=Generic, 10=Evening
 
-Inerita da v33:
-- Pool 130, intervallo 50s, peak/normal/low 8/6/4 + WOW boost +3
-- BOOST WOW: offerte sconto >=50% OPPURE brand TOP >=30%
+Inerita da v34:
+- Immagini brandate per Offerta del Giorno + offerte WOW (modulo opzionale)
+- Intervallo 50s, peak/normal/low 8/6/4 + WOW boost +3
+- BOOST WOW: sconto >=50% OPPURE brand TOP >=30%
 - Brand premium PRIMA delle generic
-- Lookup brand -> categoria (Vans -> scarpe, Tommy -> abbigliamento)
-- 27 categorie classificatore, 22 browse nodes Amazon Italia
+- Lookup brand -> categoria
+- 27 categorie, 22 browse nodes Amazon Italia
 - Countdown automatico Prime Day 23-26 giugno 2026
 """
 
@@ -30,7 +36,7 @@ from pathlib import Path
 from amazon_creatorsapi import AmazonCreatorsApi, Country
 from amazon_creatorsapi.models import Condition
 
-BOT_VERSION = "v34-BRANDED-IMAGES"
+BOT_VERSION = "v35-ANTI-REPEAT-TECH"
 
 # Modulo grafiche custom per offerte WOW (opzionale, fallback se non disponibile)
 try:
@@ -53,9 +59,11 @@ MIN_PRICE = 9.0
 MIN_RATING = 3.5
 MIN_REVIEWS = 25
 NO_RATING_MIN_PRICE = 20.0
-MAX_DEALS_POOL = 130         # 130 (era 100) - lascia spazio anche per brand premium
+MAX_DEALS_POOL = 160         # 160 (era 130) - spazio per tech+smartphone+browse+generic
 POST_INTERVAL_SECONDS = 50   # 50s (era 60s) - copre piu' tempo per ciclo
-MAX_MEMORY_SIZE = 500
+MAX_MEMORY_SIZE = 2000   # aumentato da 500 a 2000 (memoria 14 giorni)
+MEMORY_DAYS = 14         # giorni di storico ASIN+prezzo
+PRICE_CHANGE_THRESHOLD = 5.0   # ripubblica se prezzo cambia di almeno 5%
 MAX_PER_CATEGORY_POOL = 18   # 18 (era 15) - piu' offerte per categoria
 WOW_DISCOUNT_THRESHOLD = 50  # sconto >= 50% = offerta WOW
 WOW_TOP_BRAND_DISCOUNT = 30  # se brand TOP + sconto >= 30% = WOW
@@ -220,17 +228,59 @@ BEAUTY_KEYWORDS = [
     "Garnier", "Olaplex",
 ]
 
+SMARTPHONE_KEYWORDS = [
+    # Smartphone Apple
+    "iPhone 15", "iPhone 14", "iPhone 13", "iPhone 16",
+    "iPhone Pro", "iPhone Plus", "iPhone Max",
+    # Smartphone Samsung
+    "Samsung Galaxy S24", "Samsung Galaxy S23", "Samsung Galaxy S25",
+    "Samsung Galaxy A55", "Samsung Galaxy A35", "Samsung Galaxy A15",
+    "Samsung Galaxy Z Flip", "Samsung Galaxy Z Fold",
+    # Smartphone Google
+    "Google Pixel 8", "Google Pixel 9", "Google Pixel 7",
+    # Smartphone Xiaomi/Redmi (TOP cinesi piu' venduti)
+    "Xiaomi 14", "Xiaomi 13", "Redmi Note 13", "Redmi Note 14",
+    "Xiaomi Poco", "Xiaomi Mi",
+    # OnePlus
+    "OnePlus 12", "OnePlus 13", "OnePlus Nord",
+    # Motorola / Honor
+    "Motorola Edge", "Motorola Moto G",
+    "Honor Magic", "Honor 200",
+]
+
 TECH_KEYWORDS = [
-    "iPhone offerta", "Samsung Galaxy", "Apple Watch",
-    "Sony cuffie", "Bose cuffie", "JBL speaker",
-    "AirPods", "Galaxy Buds", "Beats",
-    "Lenovo laptop", "HP laptop", "ASUS laptop",
-    "iPad", "Samsung Galaxy Tab", "Kindle Paperwhite",
-    "Echo Dot Alexa", "Fire TV Stick",
-    "LG OLED", "Samsung QLED", "Sony Bravia",
-    "PlayStation 5", "Nintendo Switch", "Xbox controller",
-    "GoPro Hero", "DJI Mini",
-    "Garmin smartwatch", "Fitbit", "Amazfit",
+    # Audio brand TOP
+    "Sony WH-1000XM5", "Sony WH-1000XM4", "Sony cuffie wireless",
+    "Bose QuietComfort", "Bose Soundbar", "Bose cuffie",
+    "Apple AirPods Pro", "AirPods Max", "AirPods 4",
+    "Samsung Galaxy Buds", "JBL speaker bluetooth",
+    "Sennheiser Momentum", "Beats Studio", "Marshall speaker",
+    # Wearable
+    "Apple Watch Series", "Apple Watch Ultra",
+    "Samsung Galaxy Watch", "Garmin Forerunner", "Garmin Fenix",
+    "Fitbit Versa", "Fitbit Charge",
+    # Tablet / eReader
+    "iPad Air", "iPad Pro", "iPad mini", "iPad 11",
+    "Samsung Galaxy Tab S", "Samsung Galaxy Tab A",
+    "Kindle Paperwhite", "Kindle Scribe", "Kindle Colorsoft",
+    # Laptop
+    "MacBook Air M3", "MacBook Pro M3", "MacBook M2",
+    "Lenovo ThinkPad", "Lenovo IdeaPad", "Lenovo Legion",
+    "HP Pavilion", "HP Envy", "HP Omen",
+    "ASUS ZenBook", "ASUS ROG", "ASUS Vivobook",
+    "Dell XPS", "Dell Inspiron",
+    "Microsoft Surface", "Acer Aspire",
+    # Smart home / TV
+    "Echo Dot Alexa", "Echo Show", "Echo Hub",
+    "Fire TV Stick 4K", "Fire TV Cube",
+    "LG OLED 55", "LG OLED 65", "Samsung QLED 55", "Samsung QLED 65",
+    "Sony Bravia OLED", "Hisense ULED",
+    # Gaming
+    "PlayStation 5 Slim", "PS5 controller", "DualSense",
+    "Nintendo Switch OLED", "Xbox Series X", "Xbox Series S",
+    # Foto/Video
+    "GoPro Hero 12", "GoPro Hero 13", "DJI Mini 4", "DJI Osmo",
+    "Insta360 X4",
 ]
 
 EVENING_KEYWORDS = [
@@ -1402,7 +1452,6 @@ def send_telegram_branded(text, deal, reply_markup=None):
 
     try:
         import tempfile
-        # Genera l'immagine brandata in un file temporaneo
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp_path = tmp.name
         success = generate_post_image(deal, tmp_path)
@@ -1410,7 +1459,6 @@ def send_telegram_branded(text, deal, reply_markup=None):
             log("  [BRAND_FAIL] fallback su immagine Amazon")
             return send_telegram(text, deal.get("image_url"), reply_markup)
 
-        # Invia immagine come file
         base = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
         with open(tmp_path, "rb") as f:
             files = {"photo": ("post.png", f, "image/png")}
@@ -1420,7 +1468,6 @@ def send_telegram_branded(text, deal, reply_markup=None):
             r = requests.post("{}/sendPhoto".format(base), data=data, files=files, timeout=30)
             j = r.json()
 
-        # Cleanup
         try:
             os.unlink(tmp_path)
         except Exception:
@@ -1671,17 +1718,36 @@ def save_deal_stat(deal):
 
 
 def load_posted():
+    """Carica memoria pubblicazioni.
+
+    Nuovo formato (v34.1+):
+      { "2026-06-04": { "ASIN1": {"price": 29.99, "ts": "..."}, ... }, "_am": [...] }
+    Formato vecchio (compat):
+      { "2026-06-04": ["ASIN1", "ASIN2", ...] }
+    """
     try:
         data = json.loads(POSTED_FILE.read_text()) if POSTED_FILE.exists() else {}
         if not isinstance(data, dict):
             return {}
-        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-        filtered = {k: v for k, v in data.items() if k >= yesterday}
-        total_asins = sum(len(v) for v in filtered.values())
+
+        # Estende memoria a MEMORY_DAYS (era 1 giorno)
+        cutoff = (datetime.date.today() - datetime.timedelta(days=MEMORY_DAYS)).isoformat()
+        filtered = {k: v for k, v in data.items() if k >= cutoff}
+
+        # CONTA ASIN totali (esclude marker speciali _am, _top, ecc)
+        total_asins = 0
+        for day_key, day_data in filtered.items():
+            if isinstance(day_data, dict):
+                total_asins += len([k for k in day_data.keys() if not k.startswith("_")])
+            elif isinstance(day_data, list):
+                total_asins += len([k for k in day_data if not k.startswith("_")])
+
         if total_asins > MAX_MEMORY_SIZE:
-            log("[CLEAN] Memoria piena ({} ASIN). Pulisco IERI.".format(total_asins))
-            today = datetime.date.today().isoformat()
-            filtered = {today: filtered.get(today, [])}
+            # Tieni solo gli ultimi 7 giorni invece di MEMORY_DAYS
+            cutoff_emergency = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+            filtered = {k: v for k, v in filtered.items() if k >= cutoff_emergency}
+            log("[CLEAN] Memoria piena ({} ASIN). Ridotta a 7 giorni.".format(total_asins))
+
         return filtered
     except Exception as e:
         log("[ERR] load_posted: {}".format(e))
@@ -1692,29 +1758,134 @@ def save_posted(p):
     POSTED_FILE.write_text(json.dumps(p))
 
 
+def get_posted_info(p, asin):
+    """Cerca un ASIN nelle pubblicazioni recenti.
+    Ritorna {price, ts, days_ago} o None se mai pubblicato.
+    """
+    today = datetime.date.today()
+    for day_key in sorted(p.keys(), reverse=True):
+        if day_key.startswith("_"):
+            continue
+        day_data = p[day_key]
+        # Compat: se e' lista (vecchio formato), ritorna info senza prezzo
+        if isinstance(day_data, list):
+            if asin in day_data:
+                try:
+                    d = datetime.date.fromisoformat(day_key)
+                    return {"price": None, "ts": day_key, "days_ago": (today - d).days}
+                except Exception:
+                    return {"price": None, "ts": day_key, "days_ago": 0}
+        # Nuovo formato dict
+        elif isinstance(day_data, dict):
+            if asin in day_data and not asin.startswith("_"):
+                info = day_data[asin]
+                if isinstance(info, dict):
+                    try:
+                        d = datetime.date.fromisoformat(day_key)
+                        days_ago = (today - d).days
+                    except Exception:
+                        days_ago = 0
+                    return {
+                        "price": info.get("price"),
+                        "ts": info.get("ts", day_key),
+                        "days_ago": days_ago,
+                    }
+                # Compat: se valore non e' dict (es. None)
+                else:
+                    return {"price": None, "ts": day_key, "days_ago": 0}
+    return None
+
+
 def is_posted(p, k):
-    for day_keys in p.values():
-        if k in day_keys:
-            return True
-    return False
+    """Backwards-compat: check semplice se ASIN gia' pubblicato."""
+    return get_posted_info(p, k) is not None
 
 
-def mark_posted(p, k):
+def should_skip_repost(p, deal):
+    """Decide se l'offerta va saltata perche' gia' vista e prezzo non cambiato.
+
+    Ritorna (skip: bool, reason: str)
+    - True, "first_time" -> non e' mai stato pubblicato (NON skip)
+    - True, "same_price_recent" -> stesso prezzo, gia' pubblicato di recente
+    - True, "price_changed" -> prezzo cambiato significativamente, RIPROPOSTA
+    """
+    asin = deal["asin"]
+    info = get_posted_info(p, asin)
+    if info is None:
+        return False, "first_time"
+
+    # Se non abbiamo info sul prezzo (vecchio formato), skippa per sicurezza
+    if info["price"] is None:
+        # Se sono passati piu' di 7 giorni, ripropone
+        if info["days_ago"] >= 7:
+            return False, "old_post_no_price"
+        return True, "no_price_data"
+
+    # Calcola variazione prezzo
+    old_price = float(info["price"])
+    new_price = float(deal["current_price"])
+    if old_price <= 0:
+        return False, "invalid_old_price"
+
+    price_change_pct = abs((new_price - old_price) / old_price * 100)
+
+    if price_change_pct >= PRICE_CHANGE_THRESHOLD:
+        # Prezzo cambiato abbastanza, ripubblica
+        direction = "↓" if new_price < old_price else "↑"
+        return False, "price_changed_{:.1f}pct_{}".format(price_change_pct, direction)
+    else:
+        # Stesso prezzo, gia' visto -> skip
+        return True, "same_price_{}d_ago".format(info["days_ago"])
+
+
+def mark_posted(p, k, price=None):
+    """Salva un ASIN nelle pubblicazioni di oggi con timestamp e prezzo.
+
+    Per i marker speciali (es. "_am", "_top") mantiene la struttura lista.
+    Per gli ASIN reali usa dict {price, ts}.
+    """
     today = datetime.date.today().isoformat()
     if today not in p:
-        p[today] = []
-    if k not in p[today]:
-        p[today].append(k)
+        p[today] = {}
+
+    # Compat: se oggi e' lista, convertila in dict
+    if isinstance(p[today], list):
+        new_today = {}
+        for x in p[today]:
+            if x.startswith("_"):
+                new_today[x] = True  # marker speciale
+            else:
+                new_today[x] = {"price": None, "ts": today}
+        p[today] = new_today
+
+    if k.startswith("_"):
+        p[today][k] = True  # marker speciale
+    else:
+        # ASIN reale: salva prezzo e timestamp
+        p[today][k] = {
+            "price": price,
+            "ts": datetime.datetime.now().isoformat()[:19],
+        }
 
 
 def count_deals(p):
     today = datetime.date.today().isoformat()
-    return len([k for k in p.get(today, []) if not k.startswith("_")])
+    day_data = p.get(today, {})
+    if isinstance(day_data, list):
+        return len([k for k in day_data if not k.startswith("_")])
+    elif isinstance(day_data, dict):
+        return len([k for k in day_data.keys() if not k.startswith("_")])
+    return 0
 
 
 def is_special_posted(p, k):
     today = datetime.date.today().isoformat()
-    return k in p.get(today, [])
+    day_data = p.get(today, {})
+    if isinstance(day_data, list):
+        return k in day_data
+    elif isinstance(day_data, dict):
+        return k in day_data
+    return False
 
 
 # ============================================================
@@ -1815,21 +1986,34 @@ def main():
     # ===== RICERCA OFFERTE =====
     api = create_api()
     all_deals = []
-    seen = set()
-    for day_keys in posted.values():
-        for k in day_keys:
-            if not k.startswith("_"):
-                seen.add(k)
-    log("[POOL] Skip: {} ASIN gia' visti".format(len(seen)))
+    seen = set()  # solo ASIN gia' visti in QUESTO ciclo (anti-duplicato fasi)
+    log("[POOL] Memoria: {} giorni storici".format(MEMORY_DAYS))
 
     # Cap per categoria nel pool: evita squilibri come casaarredo=42 vs cucina=9
     cat_count_pool = {}
+    skipped_same_price = 0  # contatore offerte saltate per stesso prezzo
+    accepted_price_change = 0  # offerte accettate per prezzo cambiato
 
     def can_add_to_pool(d):
         """Verifica se l'offerta puo' entrare nel pool senza superare il cap di categoria."""
         cat = get_deal_category(d["title"])
         if cat_count_pool.get(cat, 0) >= MAX_PER_CATEGORY_POOL:
             return False
+        return True
+
+    def check_price_history(d):
+        """Verifica se l'offerta va inclusa basandosi sul price history.
+
+        Ritorna True se va inclusa, False se va skippata.
+        """
+        nonlocal skipped_same_price, accepted_price_change
+        skip, reason = should_skip_repost(posted, d)
+        if skip:
+            skipped_same_price += 1
+            return False
+        if "price_changed" in reason:
+            accepted_price_change += 1
+            d["_price_changed"] = True  # marca per logging
         return True
 
     def add_to_pool(d, source_kw):
@@ -1847,21 +2031,30 @@ def main():
             deals_found = search_deals(api, keyword=kw)
             new_count = 0
             skipped_cap = 0
+            skipped_repost = 0
             for d in deals_found:
                 if d["asin"] in seen:
                     continue
                 if len(all_deals) >= MAX_DEALS_POOL:
                     break
+                # CHECK PREZZO: salta se gia' pubblicato di recente allo stesso prezzo
+                if not check_price_history(d):
+                    skipped_repost += 1
+                    seen.add(d["asin"])  # evita ricontrollarlo nel ciclo
+                    continue
                 if not can_add_to_pool(d):
                     skipped_cap += 1
                     continue
                 add_to_pool(d, kw)
                 new_count += 1
             if new_count > 0:
+                extras = []
                 if skipped_cap > 0:
-                    log("  [{}] -> {} (cap skip: {})".format(kw[:30], new_count, skipped_cap))
-                else:
-                    log("  [{}] -> {}".format(kw[:35], new_count))
+                    extras.append("cap:{}".format(skipped_cap))
+                if skipped_repost > 0:
+                    extras.append("repost:{}".format(skipped_repost))
+                suffix = " ({})".format(", ".join(extras)) if extras else ""
+                log("  [{}] -> {}{}".format(kw[:30], new_count, suffix))
 
     def search_browse_nodes_phase(name, nodes_dict, max_nodes_per_cycle=None):
         """Cerca per browse_node_id. Restituisce TUTTO il catalogo di una categoria.
@@ -1884,11 +2077,16 @@ def main():
             deals_found = search_deals(api, browse_node_id=node_id, max_results=10)
             new_count = 0
             skipped_cap = 0
+            skipped_repost = 0
             for d in deals_found:
                 if d["asin"] in seen:
                     continue
                 if len(all_deals) >= MAX_DEALS_POOL:
                     break
+                if not check_price_history(d):
+                    skipped_repost += 1
+                    seen.add(d["asin"])
+                    continue
                 if not can_add_to_pool(d):
                     skipped_cap += 1
                     continue
@@ -1908,6 +2106,10 @@ def main():
             if d["asin"] in seen:
                 continue
             if not d.get("has_deal"):
+                continue
+            # Check price history anche per deal attivi
+            if not check_price_history(d):
+                seen.add(d["asin"])
                 continue
             seen.add(d["asin"])
             d["_kw"] = kw
@@ -1947,41 +2149,52 @@ def main():
     log("[POOL] Dopo F5: {}".format(len(all_deals)))
 
     # ===========================================
-    # FASE 6: BROWSE NODES - cattura il catalogo per categoria
-    # Limitato a 10 nodi shufflati per ciclo (evita rate limit)
+    # FASE 6: SMARTPHONE PREMIUM (esecuzione GARANTITA, prima dei browse)
+    # iPhone, Galaxy S/A, Pixel, Xiaomi, OnePlus, Motorola, Honor
     # ===========================================
-    search_browse_nodes_phase("6 BROWSE NODES (catalogo per categoria)",
-                              AMAZON_IT_BROWSE_NODES, max_nodes_per_cycle=10)
-    log("[POOL] Dopo F6 (browse): {}".format(len(all_deals)))
+    smartphone_shuffled = list(SMARTPHONE_KEYWORDS)
+    random.shuffle(smartphone_shuffled)
+    search_phase("6 SMARTPHONE premium", smartphone_shuffled[:12])
+    log("[POOL] Dopo F6 (smartphone): {}".format(len(all_deals)))
 
     # ===========================================
-    # FASE 7: KEYWORD GENERICHE - prodotti senza brand-bias
+    # FASE 7: TECH PREMIUM (esecuzione GARANTITA - audio, wearable, laptop, tablet, TV, gaming)
+    # Sony, Bose, AirPods, MacBook, iPad, PS5, Nintendo, Garmin
+    # ===========================================
+    tech_shuffled = list(TECH_KEYWORDS)
+    random.shuffle(tech_shuffled)
+    search_phase("7 TECH premium (audio/laptop/TV/gaming)", tech_shuffled[:14])
+    log("[POOL] Dopo F7 (tech): {}".format(len(all_deals)))
+
+    # ===========================================
+    # FASE 8: BROWSE NODES - cattura il catalogo per categoria
+    # Limitato a 10 nodi shufflati per ciclo (evita rate limit)
+    # ===========================================
+    search_browse_nodes_phase("8 BROWSE NODES (catalogo per categoria)",
+                              AMAZON_IT_BROWSE_NODES, max_nodes_per_cycle=10)
+    log("[POOL] Dopo F8 (browse): {}".format(len(all_deals)))
+
+    # ===========================================
+    # FASE 9: KEYWORD GENERICHE - prodotti senza brand-bias
     # Solo se il pool ha ancora spazio
     # ===========================================
     if len(all_deals) < MAX_DEALS_POOL:
         # Shuffla le generiche e prendi le prime 20 per non saturare
         generic_shuffled = list(GENERIC_KEYWORDS)
         random.shuffle(generic_shuffled)
-        search_phase("7 GENERIC (prodotti senza brand bias)", generic_shuffled[:20])
-        log("[POOL] Dopo F7 (generic): {}".format(len(all_deals)))
+        search_phase("9 GENERIC (prodotti senza brand bias)", generic_shuffled[:20])
+        log("[POOL] Dopo F9 (generic): {}".format(len(all_deals)))
 
     # ===========================================
-    # FASE 8: ELETTRONICA premium (in coda, ne abbiamo gia' tanta nelle browse)
-    # ===========================================
-    if len(all_deals) < MAX_DEALS_POOL:
-        tech_shuffled = list(TECH_KEYWORDS)
-        random.shuffle(tech_shuffled)
-        search_phase("8 ELETTRONICA premium", tech_shuffled[:10])
-        log("[POOL] Dopo F8: {}".format(len(all_deals)))
-
-    # ===========================================
-    # FASE 9: EVENING - se sera e pool basso
+    # FASE 10: EVENING - se sera e pool basso
     # ===========================================
     if hour >= 19 and len(all_deals) < max_posts_cycle * 4:
-        search_phase("9 EVENING", EVENING_KEYWORDS)
+        search_phase("10 EVENING", EVENING_KEYWORDS)
 
     log("=" * 60)
     log("[POOL FINALE] {} candidati | max post ciclo: {}".format(len(all_deals), max_posts_cycle))
+    log("[ANTI-REPEAT] saltate {} offerte gia' pubblicate stesso prezzo | accettate {} per prezzo cambiato".format(
+        skipped_same_price, accepted_price_change))
 
     if not all_deals:
         log("[STOP] Pool vuoto.")
@@ -2021,14 +2234,13 @@ def main():
     if hour >= 9 and not is_special_posted(posted, "_top"):
         best = max(all_deals, key=lambda d: d["discount_percent"])
         log("[TOP] -{}% | {}".format(best["discount_percent"], best["title"][:50]))
-        # Offerta del Giorno = sempre immagine brandata
         ok = send_telegram_branded(
             format_deal(best, special="top"),
             best,
             make_share_button(best["asin"])
         )
         if ok:
-            mark_posted(posted, best["asin"])
+            mark_posted(posted, best["asin"], price=best["current_price"])
             mark_posted(posted, "_top")
             save_posted(posted)
             save_deal_stat(best)
@@ -2109,11 +2321,13 @@ def main():
                 continue
 
         # Pubblica!
+        # Pubblica!
         dn = count_deals(posted) + 1
         sp = "flash" if d.get("has_deal") or d["discount_percent"] >= FLASH_DEAL_PERCENT else None
         wow_tag = " 🔥WOW" if is_wow and pub >= max_posts_cycle else ""
-        log("[PUB #{}{}] {} -{}% | {}".format(
-            dn, wow_tag, cat, d["discount_percent"], d["title"][:40]))
+        price_tag = " 💹PRICE-DROP" if d.get("_price_changed") else ""
+        log("[PUB #{}{}{}] {} -{}% | {}".format(
+            dn, wow_tag, price_tag, cat, d["discount_percent"], d["title"][:40]))
 
         # IMMAGINE BRANDATA SOLO per offerte WOW (sconto >=50% o brand TOP >=30%)
         if is_wow:
@@ -2121,7 +2335,7 @@ def main():
         else:
             ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
         if ok:
-            mark_posted(posted, d["asin"])
+            mark_posted(posted, d["asin"], price=d["current_price"])
             save_posted(posted)
             save_deal_stat(d)
             pub += 1
