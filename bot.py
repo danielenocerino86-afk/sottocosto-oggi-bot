@@ -72,7 +72,7 @@ WOW_BOOST_PER_CYCLE = 3      # massimo 3 offerte WOW extra per ciclo
 # Orari di pubblicazione: 7-23 IT
 PUBLISH_START_HOUR = 7
 PUBLISH_END_HOUR = 23
-TIMEZONE_OFFSET = 2
+ITALY_TIMEZONE = "Europe/Rome"
 
 # ========== PRIME DAY 2026 ==========
 PRIME_DAY_START = datetime.date(2026, 6, 23)
@@ -446,7 +446,8 @@ FOOTER_PHRASES = [
 # ============================================================
 
 def get_italy_now():
-    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
+    from zoneinfo import ZoneInfo
+    return datetime.datetime.now(ZoneInfo(ITALY_TIMEZONE))
 
 
 def is_publish_time():
@@ -1705,7 +1706,7 @@ def load_stats():
 
 def save_deal_stat(deal):
     stats = load_stats()
-    today = datetime.date.today().isoformat()
+    today = get_italy_now().date().isoformat()
     if today not in stats:
         stats[today] = []
     stats[today].append({
@@ -1713,7 +1714,7 @@ def save_deal_stat(deal):
         "current_price": deal["current_price"], "original_price": deal["original_price"],
         "discount_percent": deal["discount_percent"],
     })
-    wa = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+    wa = (get_italy_now().date() - datetime.timedelta(days=7)).isoformat()
     STATS_FILE.write_text(json.dumps({k: v for k, v in stats.items() if k >= wa}))
 
 
@@ -1731,7 +1732,7 @@ def load_posted():
             return {}
 
         # Estende memoria a MEMORY_DAYS (era 1 giorno)
-        cutoff = (datetime.date.today() - datetime.timedelta(days=MEMORY_DAYS)).isoformat()
+        cutoff = (get_italy_now().date() - datetime.timedelta(days=MEMORY_DAYS)).isoformat()
         filtered = {k: v for k, v in data.items() if k >= cutoff}
 
         # CONTA ASIN totali (esclude marker speciali _am, _top, ecc)
@@ -1744,7 +1745,7 @@ def load_posted():
 
         if total_asins > MAX_MEMORY_SIZE:
             # Tieni solo gli ultimi 7 giorni invece di MEMORY_DAYS
-            cutoff_emergency = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+            cutoff_emergency = (get_italy_now().date() - datetime.timedelta(days=7)).isoformat()
             filtered = {k: v for k, v in filtered.items() if k >= cutoff_emergency}
             log("[CLEAN] Memoria piena ({} ASIN). Ridotta a 7 giorni.".format(total_asins))
 
@@ -1762,7 +1763,7 @@ def get_posted_info(p, asin):
     """Cerca un ASIN nelle pubblicazioni recenti.
     Ritorna {price, ts, days_ago} o None se mai pubblicato.
     """
-    today = datetime.date.today()
+    today = get_italy_now().date()
     for day_key in sorted(p.keys(), reverse=True):
         if day_key.startswith("_"):
             continue
@@ -1844,7 +1845,7 @@ def mark_posted(p, k, price=None):
     Per i marker speciali (es. "_am", "_top") mantiene la struttura lista.
     Per gli ASIN reali usa dict {price, ts}.
     """
-    today = datetime.date.today().isoformat()
+    today = get_italy_now().date().isoformat()
     if today not in p:
         p[today] = {}
 
@@ -1864,12 +1865,12 @@ def mark_posted(p, k, price=None):
         # ASIN reale: salva prezzo e timestamp
         p[today][k] = {
             "price": price,
-            "ts": datetime.datetime.now().isoformat()[:19],
+            "ts": get_italy_now().isoformat(timespec="seconds"),
         }
 
 
 def count_deals(p):
-    today = datetime.date.today().isoformat()
+    today = get_italy_now().date().isoformat()
     day_data = p.get(today, {})
     if isinstance(day_data, list):
         return len([k for k in day_data if not k.startswith("_")])
@@ -1879,7 +1880,7 @@ def count_deals(p):
 
 
 def is_special_posted(p, k):
-    today = datetime.date.today().isoformat()
+    today = get_italy_now().date().isoformat()
     day_data = p.get(today, {})
     if isinstance(day_data, list):
         return k in day_data
@@ -1895,7 +1896,7 @@ def is_special_posted(p, k):
 def main():
     now = get_italy_now()
     hour = now.hour
-    today = datetime.date.today().isoformat()
+    today = get_italy_now().date().isoformat()
     wd = now.weekday()
     pd_days = days_until_prime_day()
     pd_active = is_prime_day_active()
@@ -1903,7 +1904,7 @@ def main():
     log("=" * 60)
     log("=== BOT {} ===".format(BOT_VERSION))
     log("=== UTC: {} | IT: {} ===".format(
-        datetime.datetime.now().isoformat()[:19], now.strftime("%H:%M")))
+        datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), now.strftime("%H:%M")))
     log("=== Prime Day: {} | Days: {} ===".format(
         "ATTIVO" if pd_active else "FUTURO", pd_days))
     log("=" * 60)
