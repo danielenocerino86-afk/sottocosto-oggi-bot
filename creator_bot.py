@@ -20,12 +20,15 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 AMAZON_CREDENTIAL_ID = os.environ.get("AMAZON_CREDENTIAL_ID", "")
 AMAZON_CREDENTIAL_SECRET = os.environ.get("AMAZON_CREDENTIAL_SECRET", "")
 AMAZON_PARTNER_TAG = os.environ.get("AMAZON_PARTNER_TAG", "")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "106571309"))
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 
 STATE_FILE = Path(__file__).parent / "creator_state.json"
 
 
 def log(msg):
+    for secret in (TELEGRAM_BOT_TOKEN, AMAZON_CREDENTIAL_SECRET):
+        if secret:
+            msg = str(msg).replace(secret, "[REDACTED]")
     print(msg, flush=True)
 
 
@@ -159,7 +162,7 @@ def main():
     log("=== Creator Bot polling ===")
 
     missing = [v for v in ["TELEGRAM_BOT_TOKEN", "AMAZON_CREDENTIAL_ID",
-        "AMAZON_CREDENTIAL_SECRET", "AMAZON_PARTNER_TAG"] if not os.environ.get(v)]
+        "AMAZON_CREDENTIAL_SECRET", "AMAZON_PARTNER_TAG", "ADMIN_ID"] if not os.environ.get(v)]
     if missing:
         log("Mancano variabili: {}".format(missing))
         return

@@ -25,12 +25,16 @@ Inerita da v34:
 
 import os
 import json
+import html
 import datetime
 import time
 import random
 import re
 import sys
 import requests
+from storage import Store
+from scoring import score_deal, rank_diverse
+from publishing import send, publish, UnknownDelivery
 from pathlib import Path
 
 from amazon_creatorsapi import AmazonCreatorsApi, Country
@@ -82,7 +86,21 @@ POSTED_FILE = Path(__file__).parent / "posted_deals.json"
 STATS_FILE = Path(__file__).parent / "daily_stats.json"
 
 
+_store = None
+_api_errors = 0
+
+
+def get_store():
+    global _store
+    if _store is None:
+        _store = Store()
+    return _store
+
+
 def log(msg):
+    for value in (TELEGRAM_BOT_TOKEN, AMAZON_CREDENTIAL_SECRET, os.environ.get("DATABASE_URL")):
+        if value:
+            msg = str(msg).replace(value, "[REDACTED]")
     print(msg, flush=True)
 
 
@@ -759,6 +777,7 @@ def search_deals(api, keyword=None, browse_node_id=None, search_index=None, max_
     - search_index: ricerca in macro categoria (es. 'HomeAndKitchen', 'Fashion')
     Almeno uno tra keyword/browse_node_id deve essere specificato.
     """
+    global _api_errors
     try:
         kwargs = {
             'item_count': max_results,
@@ -789,13 +808,14 @@ def search_deals(api, keyword=None, browse_node_id=None, search_index=None, max_
                     min_saving_percent=MIN_DISCOUNT_PERCENT,
                 )
             except Exception as e2:
-                log("  [API_ERR] fallback failed: {}".format(str(e2)[:80]))
+                _api_errors += 1
+                log("  [API_ERR] fallback failed")
                 return []
         else:
             return []
     except Exception as e:
-        identifier = keyword or browse_node_id or search_index
-        log("  [API_ERR] {}: {}".format(identifier, str(e)[:80]))
+        _api_errors += 1
+        log("  [API_ERR] Amazon search failed")
         return []
     if not results or not results.items:
         return []
@@ -1419,69 +1439,33 @@ def get_category_hashtag(title):
 # ============================================================
 
 def send_telegram(text, image_url=None, reply_markup=None):
-    base = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
-    try:
-        if image_url:
-            pl = {"chat_id": TELEGRAM_CHANNEL_ID, "photo": image_url, "caption": text, "parse_mode": "HTML"}
-            if reply_markup:
-                pl["reply_markup"] = json.dumps(reply_markup)
-            r = requests.post("{}/sendPhoto".format(base), json=pl, timeout=15)
-            j = r.json()
-            if j.get("ok"):
-                return True
-            log("  [TG_FAIL] photo: {}".format(j.get("description", "??")))
-        pl = {"chat_id": TELEGRAM_CHANNEL_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}
-        if reply_markup:
-            pl["reply_markup"] = json.dumps(reply_markup)
-        r = requests.post("{}/sendMessage".format(base), json=pl, timeout=15)
-        r.raise_for_status()
-        j = r.json()
-        if not j.get("ok"):
-            return False
-        return True
-    except Exception as e:
-        log("  [TG_ERR] {}".format(e))
-        return False
+    return send(TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, text, image_url, reply_markup)
 
 
 def send_telegram_branded(text, deal, reply_markup=None):
-    """Invia un post Telegram con immagine BRANDATA custom (per offerte WOW).
-    Fallback automatico su send_telegram con image_url se la generazione fallisce.
-    """
-    if not BRANDED_IMAGES_ENABLED:
-        return send_telegram(text, deal.get("image_url"), reply_markup)
+    # A single request avoids ambiguous network failures causing duplicate fallbacks.
+    return send_telegram(text, deal.get("image_url"), reply_markup)
 
+
+def publish_deal(deal, text):
+    return publish(get_store(), deal, lambda: send_telegram(text, deal.get("image_url"), make_share_button(deal["asin"])))
+
+
+def publish_special(key, sender):
+    store = get_store()
+    key = key + ":" + get_italy_now().date().isoformat()
+    token = store.claim(key)
+    if not token:
+        return False
     try:
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp_path = tmp.name
-        success = generate_post_image(deal, tmp_path)
-        if not success:
-            log("  [BRAND_FAIL] fallback su immagine Amazon")
-            return send_telegram(text, deal.get("image_url"), reply_markup)
-
-        base = "https://api.telegram.org/bot{}".format(TELEGRAM_BOT_TOKEN)
-        with open(tmp_path, "rb") as f:
-            files = {"photo": ("post.png", f, "image/png")}
-            data = {"chat_id": TELEGRAM_CHANNEL_ID, "caption": text, "parse_mode": "HTML"}
-            if reply_markup:
-                data["reply_markup"] = json.dumps(reply_markup)
-            r = requests.post("{}/sendPhoto".format(base), data=data, files=files, timeout=30)
-            j = r.json()
-
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
-        if j.get("ok"):
-            log("  [BRANDED] immagine custom inviata")
-            return True
-        log("  [TG_FAIL] branded: {}".format(j.get("description", "??")))
-        return send_telegram(text, deal.get("image_url"), reply_markup)
-    except Exception as e:
-        log("  [BRAND_ERR] {} - fallback".format(e))
-        return send_telegram(text, deal.get("image_url"), reply_markup)
+        ok = sender()
+    except Exception:
+        store.finish(key, token, "unknown")
+        raise UnknownDelivery("Special delivery requires reconciliation") from None
+    store.finish(key, token, "sent" if ok else "rejected")
+    if not ok:
+        raise RuntimeError("Telegram rejected special post")
+    return True
 
 
 def make_share_button(asin):
@@ -1512,8 +1496,8 @@ def fmt_saving(s):
 def format_deal(deal, dn=0, special=None):
     pct = deal["discount_percent"]
     asin = deal["asin"]
-    title = deal["title"]
-    e = get_category_emoji(title)
+    title = html.escape(deal["title"])
+    e = get_category_emoji(deal["title"])
     tag = get_category_hashtag(title)
     aff = "https://www.amazon.it/dp/{}?tag={}".format(asin, AMAZON_PARTNER_TAG)
     cl = "https://www.amazon.it/dp/{}".format(asin)
@@ -1559,28 +1543,28 @@ def format_deal(deal, dn=0, special=None):
 # ============================================================
 
 def send_good_morning():
-    send_telegram(random.choice(GOOD_MORNING))
+    return send_telegram(random.choice(GOOD_MORNING))
     log("[OK] Buongiorno!")
 
 
 def send_prime_promo(t):
     msg = "\U0001f4e6 <b>Amazon Prime \u2014 Prova gratuita 30 giorni</b>\n\nSpedizioni illimitate in 1 giorno, Prime Video, Prime Music, foto illimitate e accesso anticipato alle Offerte Lampo.\n\nGratis per 30 giorni. Cancelli quando vuoi.\n\n\U0001f449 <a href=\"https://www.amazon.it/provaprime?tag={t}\">Attiva la prova gratuita</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t)
-    send_telegram(msg)
+    return send_telegram(msg)
     log("[OK] Prime!")
 
 
 def send_prime_video_promo(t):
-    send_telegram("\U0001f3ac <b>Prime Video \u2014 30 giorni gratis</b>\n\nMigliaia di film e serie TV in streaming, incluse esclusive come <i>The Boys</i>, <i>The Grand Tour</i>, <i>Reacher</i> e <i>Fallout</i>.\n\nIncluso con Amazon Prime.\n\n\U0001f449 <a href=\"https://www.primevideo.com/?&tag={t}\">Attiva Prime Video gratis</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t))
+    return send_telegram("\U0001f3ac <b>Prime Video \u2014 30 giorni gratis</b>\n\nMigliaia di film e serie TV in streaming, incluse esclusive come <i>The Boys</i>, <i>The Grand Tour</i>, <i>Reacher</i> e <i>Fallout</i>.\n\nIncluso con Amazon Prime.\n\n\U0001f449 <a href=\"https://www.primevideo.com/?&tag={t}\">Attiva Prime Video gratis</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t))
     log("[OK] Prime Video!")
 
 
 def send_music_promo(t):
-    send_telegram("\U0001f3b5 <b>Amazon Music Unlimited \u2014 30 giorni gratis</b>\n\n90 milioni di brani in HD, senza pubblicit\u00e0. Download offline.\n\n\U0001f449 <a href=\"https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited?tag={t}\">Prova Music Unlimited</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t))
+    return send_telegram("\U0001f3b5 <b>Amazon Music Unlimited \u2014 30 giorni gratis</b>\n\n90 milioni di brani in HD, senza pubblicit\u00e0. Download offline.\n\n\U0001f449 <a href=\"https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited?tag={t}\">Prova Music Unlimited</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t))
     log("[OK] Music!")
 
 
 def send_audible_promo(t):
-    send_telegram("\U0001f4d6 <b>Audible \u2014 30 giorni gratis</b>\n\nMigliaia di audiolibri e podcast originali.\n\n\U0001f449 <a href=\"https://www.audible.it/?source_code=ASSORWS01219800B8&tag={t}\">Prova Audible gratis</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t))
+    return send_telegram("\U0001f4d6 <b>Audible \u2014 30 giorni gratis</b>\n\nMigliaia di audiolibri e podcast originali.\n\n\U0001f449 <a href=\"https://www.audible.it/?source_code=ASSORWS01219800B8&tag={t}\">Prova Audible gratis</a>\n\n\U0001f4e3 <b>@sottocosto_oggi</b>".format(t=t))
     log("[OK] Audible!")
 
 
@@ -1598,7 +1582,7 @@ def send_evening_recap(today):
             i+1, e, lk, d["title"][:60], d["original_price"], d["current_price"], d["discount_percent"])
     msg += "Oggi: <b>{}</b> offerte pubblicate!\n\n".format(len(deals))
     msg += "\U0001f514 Non perderti quelle di domani!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
-    send_telegram(msg)
+    return send_telegram(msg)
     log("[OK] Recap!")
 
 
@@ -1671,7 +1655,7 @@ def send_prime_day_countdown(t):
             "\U0001f4f2 <b>@sottocosto_oggi</b>"
         ).format(n=days, t=partner)
 
-    send_telegram(msg)
+    return send_telegram(msg)
     log("[OK] Countdown PD! ({} giorni)".format(days))
 
 
@@ -1689,7 +1673,7 @@ def send_prime_day_live(t):
         "\U0001f449 <a href=\"https://www.amazon.it/primeday?tag={t}\">Esplora Prime Day su Amazon</a>\n\n"
         "Stiamo pubblicando le migliori offerte in tempo reale!\n\U0001f4f2 <b>@sottocosto_oggi</b>"
     ).format(n=day_num, tot=total_days, t=t)
-    send_telegram(msg)
+    return send_telegram(msg)
     log("[OK] Prime Day live!")
 
 
@@ -1698,65 +1682,21 @@ def send_prime_day_live(t):
 # ============================================================
 
 def load_stats():
-    try:
-        return json.loads(STATS_FILE.read_text()) if STATS_FILE.exists() else {}
-    except Exception:
-        return {}
+    return get_store().stats()
 
 
 def save_deal_stat(deal):
-    stats = load_stats()
-    today = get_italy_now().date().isoformat()
-    if today not in stats:
-        stats[today] = []
-    stats[today].append({
-        "asin": deal["asin"], "title": deal["title"],
-        "current_price": deal["current_price"], "original_price": deal["original_price"],
-        "discount_percent": deal["discount_percent"],
-    })
-    wa = (get_italy_now().date() - datetime.timedelta(days=7)).isoformat()
-    STATS_FILE.write_text(json.dumps({k: v for k, v in stats.items() if k >= wa}))
+    # Publication and its payload are already committed in the same transaction.
+    pass
 
 
 def load_posted():
-    """Carica memoria pubblicazioni.
-
-    Nuovo formato (v34.1+):
-      { "2026-06-04": { "ASIN1": {"price": 29.99, "ts": "..."}, ... }, "_am": [...] }
-    Formato vecchio (compat):
-      { "2026-06-04": ["ASIN1", "ASIN2", ...] }
-    """
-    try:
-        data = json.loads(POSTED_FILE.read_text()) if POSTED_FILE.exists() else {}
-        if not isinstance(data, dict):
-            return {}
-
-        # Estende memoria a MEMORY_DAYS (era 1 giorno)
-        cutoff = (get_italy_now().date() - datetime.timedelta(days=MEMORY_DAYS)).isoformat()
-        filtered = {k: v for k, v in data.items() if k >= cutoff}
-
-        # CONTA ASIN totali (esclude marker speciali _am, _top, ecc)
-        total_asins = 0
-        for day_key, day_data in filtered.items():
-            if isinstance(day_data, dict):
-                total_asins += len([k for k in day_data.keys() if not k.startswith("_")])
-            elif isinstance(day_data, list):
-                total_asins += len([k for k in day_data if not k.startswith("_")])
-
-        if total_asins > MAX_MEMORY_SIZE:
-            # Tieni solo gli ultimi 7 giorni invece di MEMORY_DAYS
-            cutoff_emergency = (get_italy_now().date() - datetime.timedelta(days=7)).isoformat()
-            filtered = {k: v for k, v in filtered.items() if k >= cutoff_emergency}
-            log("[CLEAN] Memoria piena ({} ASIN). Ridotta a 7 giorni.".format(total_asins))
-
-        return filtered
-    except Exception as e:
-        log("[ERR] load_posted: {}".format(e))
-        return {}
+    return get_store().history()
 
 
 def save_posted(p):
-    POSTED_FILE.write_text(json.dumps(p))
+    # Database is authoritative; never overwrite state with a stale snapshot.
+    pass
 
 
 def get_posted_info(p, asin):
@@ -1894,6 +1834,10 @@ def is_special_posted(p, k):
 # ============================================================
 
 def main():
+    global _api_errors
+    _api_errors = 0
+    if os.environ.get("BOT_PAUSED", "").lower() == "true":
+        return
     now = get_italy_now()
     hour = now.hour
     today = get_italy_now().date().isoformat()
@@ -1918,7 +1862,7 @@ def main():
         if not os.environ.get(v)]
     if missing:
         log("[FATAL] Mancano variabili: {}".format(missing))
-        return
+        raise RuntimeError("Required credentials missing")
 
     posted = load_posted()
     posted_count_today = count_deals(posted)
@@ -1929,7 +1873,7 @@ def main():
 
     # ===== PALINSESTO SPECIALI =====
     if hour == 7 and not is_special_posted(posted, "_am"):
-        send_good_morning()
+        publish_special("_am", lambda: send_good_morning())
         mark_posted(posted, "_am")
         save_posted(posted)
         time.sleep(5)
@@ -1939,7 +1883,7 @@ def main():
         key = "_pd_cd_{}".format(pd_days)
         # Pubblica countdown alle 9:00 nei giorni di countdown
         if hour == 9 and not is_special_posted(posted, key):
-            send_prime_day_countdown(AMAZON_PARTNER_TAG)
+            publish_special(key, lambda: send_prime_day_countdown(AMAZON_PARTNER_TAG))
             mark_posted(posted, key)
             save_posted(posted)
             time.sleep(5)
@@ -1950,7 +1894,7 @@ def main():
         for h, suffix in [(9, "am"), (14, "pm"), (20, "ev")]:
             key = "_pd_live_{}_{}".format(today, suffix)
             if hour == h and not is_special_posted(posted, key):
-                send_prime_day_live(AMAZON_PARTNER_TAG)
+                publish_special(key, lambda: send_prime_day_live(AMAZON_PARTNER_TAG))
                 mark_posted(posted, key)
                 save_posted(posted)
                 time.sleep(5)
@@ -1958,28 +1902,28 @@ def main():
     # PROMO REGOLARI (saltate durante Prime Day per non sovrapporsi)
     if not pd_active:
         if hour == 11 and not is_special_posted(posted, "_pr"):
-            send_prime_promo(AMAZON_PARTNER_TAG)
+            publish_special("_pr", lambda: send_prime_promo(AMAZON_PARTNER_TAG))
             mark_posted(posted, "_pr")
             save_posted(posted)
             time.sleep(5)
         if hour == 14 and not is_special_posted(posted, "_pv"):
-            send_prime_video_promo(AMAZON_PARTNER_TAG)
+            publish_special("_pv", lambda: send_prime_video_promo(AMAZON_PARTNER_TAG))
             mark_posted(posted, "_pv")
             save_posted(posted)
             time.sleep(5)
         if hour == 17 and not is_special_posted(posted, "_ab"):
-            send_audible_promo(AMAZON_PARTNER_TAG)
+            publish_special("_ab", lambda: send_audible_promo(AMAZON_PARTNER_TAG))
             mark_posted(posted, "_ab")
             save_posted(posted)
             time.sleep(5)
         if hour == 19 and not is_special_posted(posted, "_mu"):
-            send_music_promo(AMAZON_PARTNER_TAG)
+            publish_special("_mu", lambda: send_music_promo(AMAZON_PARTNER_TAG))
             mark_posted(posted, "_mu")
             save_posted(posted)
             time.sleep(5)
 
     if hour == 22 and not is_special_posted(posted, "_rc"):
-        send_evening_recap(today)
+        publish_special("_rc", lambda: send_evening_recap(today))
         mark_posted(posted, "_rc")
         save_posted(posted)
         return
@@ -2198,6 +2142,8 @@ def main():
         skipped_same_price, accepted_price_change))
 
     if not all_deals:
+        if _api_errors:
+            raise RuntimeError("Amazon searches failed")
         log("[STOP] Pool vuoto.")
         return
 
@@ -2205,7 +2151,18 @@ def main():
     # 1. Shuffla entro tier di priorita' (tier1 sopra, ma randomizzati)
     # 2. Diversifica round-robin tra categorie con shuffle ogni giro
     # 3. CAP per categoria: max 2 offerte stessa categoria per ciclo
-    all_deals = shuffle_within_priority(all_deals)
+    scored = []
+    for deal in all_deals:
+        try:
+            deal["score"], deal["score_parts"] = score_deal(deal, get_store().minimum(deal["asin"]))
+            get_store().observe(deal, deal["score"])
+            if deal["score"] >= float(os.environ.get("MIN_DEAL_SCORE", "20")):
+                scored.append(deal)
+        except (ValueError, TypeError):
+            log("[REJECT] Invalid candidate data")
+    all_deals = scored
+    if not all_deals:
+        return
 
     log("[TOP 5] (dopo shuffle nei tier):")
     for i, d in enumerate(all_deals[:5]):
@@ -2224,7 +2181,7 @@ def main():
         ", ".join(["{}={}".format(k, v) for k, v in sorted(cat_counts_pool.items(), key=lambda x: -x[1])[:8]])))
 
     # Round-robin tra categorie con randomizzazione
-    all_deals = diversify_deals(all_deals)
+    all_deals = rank_diverse(all_deals, get_deal_category)
 
     log("[ORDINE PUBBLICAZIONE] (primi 8 dopo diversify):")
     for i, d in enumerate(all_deals[:8]):
@@ -2233,15 +2190,15 @@ def main():
 
     # ===== TOP DEL GIORNO (con immagine BRANDATA) =====
     if hour >= 9 and not is_special_posted(posted, "_top"):
-        best = max(all_deals, key=lambda d: d["discount_percent"])
+        best = max(all_deals, key=lambda d: d["score"])
         log("[TOP] -{}% | {}".format(best["discount_percent"], best["title"][:50]))
-        ok = send_telegram_branded(
-            format_deal(best, special="top"),
-            best,
-            make_share_button(best["asin"])
-        )
+        ok = publish_deal(best, format_deal(best, special="top"))
         if ok:
             mark_posted(posted, best["asin"], price=best["current_price"])
+            marker = "_top:" + today
+            token = get_store().claim(marker)
+            if token:
+                get_store().finish(marker, token, "sent")
             mark_posted(posted, "_top")
             save_posted(posted)
             save_deal_stat(best)
@@ -2333,10 +2290,7 @@ def main():
             dn, wow_tag, price_tag, cat, d["discount_percent"], d["title"][:40]))
 
         # IMMAGINE BRANDATA SOLO per offerte WOW (sconto >=50% o brand TOP >=30%)
-        if is_wow:
-            ok = send_telegram_branded(format_deal(d, dn, sp), d, make_share_button(d["asin"]))
-        else:
-            ok = send_telegram(format_deal(d, dn, sp), d.get("image_url"), make_share_button(d["asin"]))
+        ok = publish_deal(d, format_deal(d, dn, sp))
         if ok:
             mark_posted(posted, d["asin"], price=d["current_price"])
             save_posted(posted)
@@ -2360,8 +2314,14 @@ def main():
 
     log("=" * 60)
     log("[RIEPILOGO] Pubblicate {} | Totale oggi: {}".format(pub, count_deals(posted)))
+    if _api_errors:
+        raise RuntimeError("Some Amazon searches failed")
     log("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    from monitoring import run_monitored
+    try:
+        run_monitored(main, get_store())
+    except Exception:
+        raise SystemExit("[FATAL] Run failed; inspect dashboard and Telegram before retrying") from None

@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   fetch-and-post:
+    environment: telegram-publishing
     if: vars.BOT_PAUSED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -31,19 +32,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Restore cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            posted_deals.json
-            daily_stats.json
-          key: bot-data-v27-${{ github.run_id }}
-          restore-keys: |
-            bot-data-v27-
-            bot-data-
-
       - name: Run bot
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+          MIN_DEAL_SCORE: ${{ vars.MIN_DEAL_SCORE || '20' }}
+          BOT_PAUSED: ${{ vars.BOT_PAUSED }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           AMAZON_CREDENTIAL_ID: ${{ secrets.AMAZON_CREDENTIAL_ID }}
@@ -51,12 +45,3 @@ jobs:
           AMAZON_PARTNER_TAG: ${{ secrets.AMAZON_PARTNER_TAG }}
           MIN_DISCOUNT_PERCENT: ${{ secrets.MIN_DISCOUNT_PERCENT || '10' }}
         run: python bot.py
-
-      - name: Save cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            posted_deals.json
-            daily_stats.json
-          key: bot-data-v27-${{ github.run_id }}
