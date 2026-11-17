@@ -9,8 +9,13 @@ concurrency:
   group: sottocosto-creator
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   poll-creator:
+    if: vars.BOT_PAUSED != 'true'
+    environment: telegram-publishing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -41,7 +46,7 @@ jobs:
           AMAZON_CREDENTIAL_ID: ${{ secrets.AMAZON_CREDENTIAL_ID }}
           AMAZON_CREDENTIAL_SECRET: ${{ secrets.AMAZON_CREDENTIAL_SECRET }}
           AMAZON_PARTNER_TAG: ${{ secrets.AMAZON_PARTNER_TAG }}
-          ADMIN_ID: ${{ secrets.ADMIN_ID || '106571309' }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
         run: python creator_bot.py
 
       - name: Save state
