@@ -2284,7 +2284,9 @@ def main():
         if not is_publish_time():
             break
 
-        if is_posted(posted, d["asin"]):
+        # A previously posted ASIN is eligible only after a verified price drop.
+        skip_repost, _ = should_skip_repost(posted, d)
+        if skip_repost:
             continue
 
         cat = get_deal_category(d["title"])
