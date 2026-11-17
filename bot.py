@@ -1827,10 +1827,10 @@ def should_skip_repost(p, deal):
     if old_price <= 0:
         return False, "invalid_old_price"
 
-    price_change_pct = abs((new_price - old_price) / old_price * 100)
+    price_change_pct = (old_price - new_price) / old_price * 100
 
     if price_change_pct >= PRICE_CHANGE_THRESHOLD:
-        # Prezzo cambiato abbastanza, ripubblica
+        # Solo un ribasso significativo giustifica la ripubblicazione
         direction = "↓" if new_price < old_price else "↑"
         return False, "price_changed_{:.1f}pct_{}".format(price_change_pct, direction)
     else:
