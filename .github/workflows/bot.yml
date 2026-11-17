@@ -7,12 +7,16 @@ on:
     - cron: '*/10 5-22 * * *'
   workflow_dispatch:    # trigger manuale + esterno (cron-job.org)
 
+permissions:
+  contents: read
+
 concurrency:
   group: sottocosto-bot
   cancel-in-progress: false
 
 jobs:
   fetch-and-post:
+    if: vars.BOT_PAUSED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
